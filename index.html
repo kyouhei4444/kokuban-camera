@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#1d4a2e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>黒板カメラ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <button id="tb-back" class="tb-btn hidden" title="戻る">‹</button>
+  <div class="tb-main">
+    <div class="tb-title" id="tb-title">黒板カメラ</div>
+    <div class="tb-sub" id="tb-sub">電子小黒板つき工事写真</div>
+  </div>
+  <button id="tb-set" class="tb-btn" title="設定">⚙</button>
+</header>
+
+<main>
+
+<!-- ================= ホーム：現場の選択 ================= -->
+<section id="view-home" class="view active">
+  <div class="pad">
+    <div class="sec-h">現場を選ぶ</div>
+    <div id="site-list" class="site-list"></div>
+    <button id="btn-site-add" class="btn big primary">＋ 新しい現場を登録</button>
+
+    <div class="card mt">
+      <div class="card-h">撮影設定（いま）</div>
+      <div class="kv"><span>画素数</span><b id="home-res">1280×960</b></div>
+      <div class="kv"><span>黒板</span><b id="home-theme">緑</b></div>
+      <button id="btn-home-set" class="btn">設定を変える</button>
+    </div>
+
+    <div class="card mt">
+      <div class="card-h">バックアップ</div>
+      <p class="note">現場名と黒板の入力内容（写真は含まない）をファイルに書き出し・読み込みします。機種変更のときに使います。</p>
+      <div class="row2">
+        <button id="btn-export" class="btn">書き出す</button>
+        <button id="btn-import" class="btn">読み込む</button>
+      </div>
+      <input type="file" id="file-import" accept=".json,application/json" class="hidden">
+    </div>
+
+    <button id="btn-help" class="btn ghost mt">使い方・電子納品の注意</button>
+    <p class="ver" id="ver"></p>
+  </div>
+</section>
+
+<!-- ================= 黒板の入力 ================= -->
+<section id="view-board" class="view">
+  <div class="pad">
+    <div class="card">
+      <div class="card-h">黒板のプレビュー</div>
+      <div class="bp-wrap"><canvas id="board-preview"></canvas></div>
+    </div>
+
+    <div class="card">
+      <label class="fld">
+        <span>工種</span>
+        <input id="f-kousyu" list="dl-kousyu" autocomplete="off" placeholder="例：掘削工、擁壁工、施工状況">
+      </label>
+      <div class="chips" id="chips-kousyu"></div>
+
+      <label class="fld">
+        <span>種別・細別（任意）</span>
+        <input id="f-shubetsu" list="dl-shubetsu" autocomplete="off" placeholder="例：床掘り、基礎砕石、型枠">
+      </label>
+
+      <label class="fld">
+        <span>測点</span>
+        <div class="stepper">
+          <button class="btn sm" data-step="-1">◀</button>
+          <input id="f-sokuten" list="dl-sokuten" autocomplete="off" placeholder="例：No.5+10.0">
+          <button class="btn sm" data-step="1">▶</button>
+        </div>
+      </label>
+      <div class="chips" id="chips-sokuten"></div>
+
+      <label class="fld">
+        <span>黒板内容（改行で行が増えます）</span>
+        <textarea id="f-naiyou" rows="4" placeholder="例：&#10;床掘り完了&#10;項目|設計|実測&#10;幅 W|1.20|1.22"></textarea>
+      </label>
+      <p class="note">「<b>項目|設計|実測</b>」のように <b>|</b> で区切ると表になります。</p>
+      <div class="chips" id="chips-naiyou"></div>
+    </div>
+
+    <div class="row2 sticky-actions">
+      <button id="btn-gallery" class="btn">写真一覧 <span id="cnt-photos" class="badge">0</span></button>
+      <button id="btn-camera" class="btn primary">📷 撮影する</button>
+    </div>
+  </div>
+
+  <datalist id="dl-kousyu"></datalist>
+  <datalist id="dl-shubetsu"></datalist>
+  <datalist id="dl-sokuten"></datalist>
+</section>
+
+<!-- ================= 写真一覧 ================= -->
+<section id="view-gallery" class="view">
+  <div class="gal-bar">
+    <button id="gal-selall" class="btn sm">全選択</button>
+    <span id="gal-info" class="gal-info"></span>
+  </div>
+  <div id="gal-grid" class="gal-grid"></div>
+  <div id="gal-empty" class="note center hidden">まだ写真はありません。</div>
+  <div class="gal-actions" id="gal-actions">
+    <button id="gal-share" class="btn">共有</button>
+    <button id="gal-dl" class="btn">保存</button>
+    <button id="gal-zip" class="btn">ZIP</button>
+    <button id="gal-del" class="btn danger">削除</button>
+  </div>
+</section>
+
+</main>
+
+<!-- ================= カメラ（全画面） ================= -->
+<section id="view-camera" class="hidden">
+  <div id="cam-area">
+    <div id="cam-frame">
+      <video id="cam-video" playsinline muted autoplay></video>
+      <canvas id="cam-board"></canvas>
+      <div id="cam-flash"></div>
+    </div>
+    <div id="cam-top">
+      <button id="cam-back" class="cbtn" title="戻る">‹</button>
+      <button id="cam-res" class="cpill">1280×960</button>
+      <span id="cam-src" class="cpill dim"></span>
+      <span class="sp"></span>
+      <button id="cam-torch" class="cbtn hidden" title="ライト">💡</button>
+      <button id="cam-set" class="cbtn" title="設定">⚙</button>
+    </div>
+    <div id="cam-msg" class="hidden"></div>
+  </div>
+  <div id="cam-ctrl">
+    <div class="cc-row">
+      <button id="cam-sk-prev" class="cbtn sm" title="測点を戻す">◀</button>
+      <button id="cam-edit" class="cpill grow" title="黒板を編集"><span id="cam-sk">測点</span></button>
+      <button id="cam-sk-next" class="cbtn sm" title="測点を進める">▶</button>
+    </div>
+    <div class="cc-row main">
+      <button id="cam-thumb" class="thumb" title="写真一覧"></button>
+      <button id="cam-shutter" title="撮影"><span></span></button>
+      <div class="cc-col">
+        <button id="cam-bshow" class="cbtn sm" title="黒板の表示">板</button>
+        <div class="cc-pair">
+          <button id="cam-bsmall" class="cbtn sm" title="黒板を小さく">−</button>
+          <button id="cam-bbig" class="cbtn sm" title="黒板を大きく">＋</button>
+        </div>
+      </div>
+    </div>
+    <input id="cam-zoom" type="range" class="hidden" min="1" max="1" step="0.1" value="1">
+  </div>
+</section>
+
+<!-- ================= ダイアログ ================= -->
+<div id="dlg" class="dlg hidden">
+  <div class="dlg-box">
+    <div class="dlg-h"><span id="dlg-title"></span><button id="dlg-x" class="tb-btn sm">×</button></div>
+    <div class="dlg-body" id="dlg-body"></div>
+  </div>
+</div>
+
+<!-- 写真の拡大表示 -->
+<div id="viewer" class="viewer hidden">
+  <img id="viewer-img" alt="">
+  <div class="viewer-info" id="viewer-info"></div>
+  <div class="viewer-bar">
+    <button id="vw-close" class="btn">閉じる</button>
+    <button id="vw-share" class="btn">共有</button>
+    <button id="vw-dl" class="btn">保存</button>
+    <button id="vw-del" class="btn danger">削除</button>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<template id="tpl-settings">
+  <label class="fld"><span>画素数（4:3）</span>
+    <select id="s-res">
+      <option value="640x480">640×480（約30万画素）</option>
+      <option value="1280x960">1280×960（約120万画素）電子納品標準</option>
+      <option value="1600x1200">1600×1200（約190万画素）</option>
+      <option value="2048x1536">2048×1536（約310万画素）</option>
+      <option value="2592x1944">2592×1944（約500万画素）</option>
+    </select>
+  </label>
+  <label class="fld"><span>写真の向き</span>
+    <select id="s-orient">
+      <option value="auto">自動（スマホの向きに合わせる）</option>
+      <option value="landscape">いつも横（例 1280×960）</option>
+      <option value="portrait">いつも縦（例 960×1280）</option>
+    </select>
+  </label>
+  <label class="fld"><span>JPEG 画質</span>
+    <select id="s-quality">
+      <option value="0.8">標準（ファイル小さめ）</option>
+      <option value="0.92">高画質</option>
+      <option value="0.97">最高画質</option>
+    </select>
+  </label>
+  <label class="fld"><span>黒板の色</span>
+    <select id="s-theme">
+      <option value="green">緑（黒板）</option>
+      <option value="black">黒</option>
+      <option value="white">白（ホワイトボード）</option>
+    </select>
+  </label>
+  <label class="fld"><span>撮影日の書き方</span>
+    <select id="s-date">
+      <option value="wareki">令和8年10月19日</option>
+      <option value="seireki">2026年10月19日</option>
+      <option value="slash">2026/10/19</option>
+    </select>
+  </label>
+  <div class="fld"><span>黒板に載せる項目</span>
+    <div class="checks">
+      <label><input type="checkbox" data-row="koji"> 工事名</label>
+      <label><input type="checkbox" data-row="kousyu"> 工種</label>
+      <label><input type="checkbox" data-row="shubetsu"> 種別</label>
+      <label><input type="checkbox" data-row="sokuten"> 測点</label>
+      <label><input type="checkbox" data-row="naiyou"> 黒板内容</label>
+      <label><input type="checkbox" data-row="date"> 撮影日</label>
+      <label><input type="checkbox" data-row="contractor"> 受注者</label>
+    </div>
+  </div>
+  <label class="sw"><input type="checkbox" id="s-auto"> 撮影ごとに端末へ保存する（ダウンロード）</label>
+  <label class="sw"><input type="checkbox" id="s-gps"> 位置情報（GPS）を写真に記録する</label>
+  <label class="sw"><input type="checkbox" id="s-still"> 静止画モード（対応機種のみ・高画素から切り出す）</label>
+  <label class="sw"><input type="checkbox" id="s-sound"> シャッター音</label>
+  <button id="s-reset-pos" class="btn mt">黒板の位置・大きさを初期に戻す</button>
+</template>
+
+<template id="tpl-help">
+  <div class="help">
+    <h3>使い方</h3>
+    <ol>
+      <li>ホームで<b>現場を登録</b>（工事名・受注者名）して選ぶ。</li>
+      <li><b>工種・測点・黒板内容</b>を入れて「撮影する」。</li>
+      <li>カメラ画面で黒板を<b>指でドラッグ</b>して置き場所を決め、＋−で大きさを変える。</li>
+      <li>シャッターを押すと、黒板を焼き込んだ写真が<b>指定の画素数</b>（標準 1280×960）で保存される。</li>
+      <li>測点は ◀ ▶ で番号を1つずつ送れる（No.5 → No.6）。</li>
+      <li>「写真一覧」から共有・保存・ZIP（撮影台帳 CSV 付き）で取り出せる。</li>
+    </ol>
+    <h3>電子納品について（必ずお読みください）</h3>
+    <p>このアプリは黒板を<b>画像に焼き込む</b>方式です。国土交通省・山梨県の「デジタル写真管理情報基準」で
+      <b>小黒板情報の電子化</b>（電子小黒板）として扱うには、<b>J-COMSIA の信憑性確認（改ざん検知機能）に
+      対応したソフト</b>であることが条件になっており、本アプリはその認定を受けていません。</p>
+    <p>電子小黒板として提出する場合は、事前に<b>監督員と協議</b>し、了解を得てから使ってください
+      （認定品の使用を求められる場合があります）。写真の編集（明るさ補正等）をしていないことの確認用に、
+      各写真の <b>SHA-256 値</b>を撮影時に記録し、ZIP の撮影台帳に載せています。</p>
+    <p>画素数は「有効画素数は小黒板の文字が判読できることを指標とする（100万〜300万画素程度）」の考え方に合わせて、
+      初期値を <b>1280×960（約120万画素・4:3）</b>にしています。</p>
+    <h3>保存場所</h3>
+    <p>写真はこのアプリ（ブラウザ）の中に保存されます。<b>ブラウザのデータを消すと写真も消えます。</b>
+      「撮影ごとに端末へ保存」をオンにしておくと、端末の「ダウンロード」フォルダーにも残ります。</p>
+  </div>
+</template>
+
+<script src="js/exif.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/board.js"></script>
+<script src="js/store.js"></script>
+<script src="js/camera.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
