@@ -3,6 +3,7 @@
   "short_name": "黒板カメラ",
   "description": "電子小黒板を焼き込んだ工事写真を 4:3（標準 1280×960）で撮る現場用カメラ",
   "lang": "ja",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -10,6 +11,9 @@
   "background_color": "#1d4a2e",
   "theme_color": "#1d4a2e",
   "categories": ["photo", "productivity", "utilities"],
+  "related_applications": [
+    { "platform": "webapp", "url": "https://kyouhei4444.github.io/kokuban-camera/manifest.webmanifest" }
+  ],
   "icons": [
     { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.0.0';
+  const VERSION = '1.0.1';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -110,6 +110,7 @@
         }).catch(() => {});
       });
     }
+    renderInstall();
     $('home-res').textContent = set.res.replace('x', '×');
     $('home-theme').textContent = THEME_NAME[set.theme] || set.theme;
   }
@@ -781,6 +782,84 @@
       alert('読み込めませんでした：' + err.message);
     }
   };
+
+  // ---------- ホーム画面に追加（PWA） ----------
+  // Android の Chrome はボタン1つで追加できる。iPhone は手順を案内する。
+  // 「すでにインストールされています」と出る端末は、アイコンがアプリ一覧にあるので開き方を案内する。
+  let deferredPrompt = null, installedApp = false;
+  function isStandalone() {
+    try {
+      return matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: fullscreen)').matches ||
+        matchMedia('(display-mode: minimal-ui)').matches || navigator.standalone === true;
+    } catch (e) { return false; }
+  }
+  function browserInfo() {
+    const ua = navigator.userAgent;
+    if (/Line\//i.test(ua)) return { inapp: 'LINE' };
+    if (/FBAN|FBAV|FB_IAB|Instagram/i.test(ua)) return { inapp: 'SNS アプリ' };
+    if (/; wv\)/.test(ua)) return { inapp: 'ほかのアプリ' };
+    if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return { ios: true, notSafari: /CriOS|FxiOS|EdgiOS/.test(ua) };
+    if (/Android/.test(ua)) return { android: true };
+    return { pc: true };
+  }
+  function renderInstall() {
+    const box = $('install-box');
+    if (!box) return;
+    if (isStandalone() || !/^https?:$/.test(location.protocol)) { box.innerHTML = ''; return; }
+    let later = 0;
+    try { later = +localStorage.getItem('kc.installLater') || 0; } catch (e) {}
+    if (later && Date.now() - later < 3 * 86400000) { box.innerHTML = ''; return; }
+    const b = browserInfo();
+    let title = 'ホーム画面に追加しましょう', msg = '', btn = '';
+    if (deferredPrompt) {
+      msg = 'ボタンを押すと、ホーム画面のアイコンから全画面のカメラとしてすぐ起動できます。圏外でも使えます。';
+      btn = '<button class="btn primary" id="btn-install">ホーム画面に追加</button>';
+    } else if (installedApp) {
+      title = 'この端末にはインストール済みです';
+      msg = 'ホーム画面を<b>上にスワイプしてアプリ一覧</b>を開き、<b>「黒板カメラ」</b>をタップしてください。' +
+        'アイコンを長押ししてホーム画面へドラッグすると、次からはホーム画面から開けます。' +
+        'Chrome の <b>⋮</b> メニューに<b>「アプリで開く」</b>が出ていれば、そこからも開けます。';
+    } else if (b.inapp) {
+      title = b.inapp + 'の中で開いています';
+      msg = 'このままでは追加できません。<b>⋮</b> や <b>…</b> から<b>「ブラウザで開く」</b>を選び、Chrome（iPhone は Safari）で開き直してください。';
+    } else if (b.ios) {
+      msg = b.notSafari
+        ? 'iPhone では <b>Safari</b> で開いてください。共有ボタン（□に↑）→<b>「ホーム画面に追加」</b>を選びます。'
+        : '画面下の<b>共有ボタン（□に↑）</b>を押し、<b>「ホーム画面に追加」</b>を選んでください。';
+    } else if (b.android) {
+      msg = 'Chrome の <b>⋮</b> メニューから<b>「ホーム画面に追加」</b>（または「アプリをインストール」）を選んでください。' +
+        '「すでにインストールされています」と出たときは、ホーム画面を上にスワイプした<b>アプリ一覧</b>に「黒板カメラ」があります。';
+    } else {
+      title = 'スマホで使うアプリです';
+      msg = 'スマホのブラウザでこのページを開き、ホーム画面に追加してください。';
+    }
+    box.innerHTML = `<section class="install">
+      <div class="install-top"><img src="icons/icon-192.png" alt=""><div><b>${title}</b><p>${msg}</p></div></div>
+      <div class="row">${btn}<button class="btn" id="btn-copyurl">URLをコピー</button><button class="btn ghost" id="btn-later">あとで</button></div>
+    </section>`;
+    if ($('btn-install')) $('btn-install').onclick = doInstall;
+    $('btn-copyurl').onclick = () => {
+      const url = location.href.split('#')[0];
+      (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(() => toast('URLをコピーしました')).catch(() => toast(url, 5000));
+    };
+    $('btn-later').onclick = () => { try { localStorage.setItem('kc.installLater', String(Date.now())); } catch (e) {} renderInstall(); };
+  }
+  async function doInstall() {
+    const p = deferredPrompt;
+    deferredPrompt = null;
+    if (!p) { renderInstall(); return; }
+    try {
+      p.prompt();
+      const r = await p.userChoice;
+      if (r && r.outcome === 'accepted') toast('ホーム画面に追加しました。アイコンから開いてください', 4000);
+    } catch (e) {}
+    renderInstall();
+  }
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; installedApp = false; renderInstall(); });
+  window.addEventListener('appinstalled', () => { deferredPrompt = null; installedApp = true; renderInstall(); });
+  if (navigator.getInstalledRelatedApps) {
+    navigator.getInstalledRelatedApps().then(list => { if (list && list.length) { installedApp = true; renderInstall(); } }).catch(() => {});
+  }
 
   // ---------- 起動 ----------
   $('ver').textContent = '黒板カメラ v' + VERSION;

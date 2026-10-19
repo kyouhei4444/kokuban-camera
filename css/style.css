@@ -76,6 +76,15 @@ main{padding-top:calc(var(--toph) + var(--safet))}
 .sticky-actions .btn{min-height:56px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
 .badge{background:var(--green);color:#fff;border-radius:999px;padding:0 8px;font-size:13px;min-width:24px}
 
+/* ---------- ホーム画面に追加 ---------- */
+.install{background:#fff7ef;border:2px solid var(--accent);border-radius:12px;padding:12px;margin-bottom:14px}
+.install-top{display:flex;gap:10px;align-items:flex-start}
+.install-top img{width:48px;height:48px;border-radius:10px;flex:none}
+.install-top b{display:block;font-size:16px}
+.install-top p{margin:4px 0 0;font-size:14px;color:var(--text)}
+.install .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.install .row .btn{flex:1;min-width:110px}
+
 /* ---------- 現場一覧 ---------- */
 .site-list{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
 .site{
