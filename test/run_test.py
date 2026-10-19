@@ -107,6 +107,8 @@ def main():
     chk('APP1 が SOI 直後', raw[2:4] == b'\xff\xe1')
     im2 = Image.open(os.path.join(OUT, 'photo2.jpg'))
     chk('PIL: 2枚目 1536x2048', im2.size == (1536, 2048), im2.size)
+    im3 = Image.open(os.path.join(OUT, 'photo_rot90.jpg'))
+    chk('PIL: 横に倒した写真 960x1280', im3.size == (960, 1280), im3.size)
     z = zipfile.ZipFile(os.path.join(OUT, 'test.zip'))
     chk('ZIP 検査', z.testzip() is None, z.namelist())
     chk('ZIP 日本語名', any('撮影台帳' in n for n in z.namelist()))

@@ -3,14 +3,33 @@
    プレビュー（画面）と保存画像の両方をこの1つの関数で描くので、
    見たままの位置・大きさで写真に焼き込まれる。
    寸法はすべて黒板の幅 W に比例させている。
+
+   形は現場で使っている黒板写真（1280×960 で幅 296・高さ 396px）に合わせた：
+     深緑の面、外周から少し内側に白い枠線、
+     左に見出し列（工事名・工種・測点）、下に大きな内容欄（中央に大きな文字）。
    ============================================================ */
 const Board = (() => {
   const THEMES = {
-    green: { bg: '#1d4a2e', line: 'rgba(255,255,255,.85)', label: '#f4f1d0', text: '#ffffff', frame: '#7a5530' },
-    black: { bg: '#1b1d1f', line: 'rgba(255,255,255,.8)', label: '#f4f1d0', text: '#ffffff', frame: '#555' },
-    white: { bg: '#fbfbf6', line: '#2b2b2b', label: '#1d3d7a', text: '#111111', frame: '#9a9a9a' }
+    green: { bg: '#0b4c2a', line: '#ffffff', label: '#ffffff', text: '#ffffff' },
+    black: { bg: '#1b1d1f', line: '#ffffff', label: '#ffffff', text: '#ffffff' },
+    white: { bg: '#fbfbf6', line: '#222222', label: '#222222', text: '#111111' }
   };
   const FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Noto Sans CJK JP","Yu Gothic","Meiryo",sans-serif';
+
+  // 寸法（幅 W に対する比）… 元写真の実測から
+  const R = {
+    aspect: 396 / 296,   // 高さ / 幅
+    margin: 6 / 296,     // 外周〜白枠
+    lw: 2 / 296,         // 線の太さ
+    labelW: 79 / 296,    // 見出し列の幅
+    rowKoji: 46 / 296,   // 工事名の行（2行まで折り返す）
+    row: 40 / 296,       // そのほかの行
+    label: 15 / 296,     // 見出しの文字
+    value: 15 / 296,     // 値の文字
+    koji: 13.5 / 296,    // 工事名の文字
+    body: 38 / 296,      // 内容欄の文字（最大）
+    bodyMin: 0.36        // 内容欄の最小の高さ（W 比）
+  };
 
   function wareki(d) {
     const y = d.getFullYear();
@@ -24,125 +43,152 @@ const Board = (() => {
     return wareki(d);
   }
 
-  /** 黒板に載せる行を作る */
+  /** 黒板に載せる内容 → { heads: [{label,value,koji}], body: [行…] } */
   function rows(site, b, set, date) {
     const show = set.rows || {};
-    const out = [];
-    const add = (key, label, value) => {
+    const heads = [];
+    const add = (key, label, value, always) => {
       if (show[key] === false) return;
       value = (value || '').trim();
-      if (!value) return;
-      out.push({ kind: 'row', label, value });
+      if (!value && !always) return;
+      heads.push({ label, value, koji: key === 'koji' });
     };
-    add('koji', '工事名', site && site.name);
-    add('kousyu', '工　種', b.kousyu);
-    add('shubetsu', '種　別', b.shubetsu);
-    add('sokuten', '測　点', b.sokuten);
+    add('koji', '工事名', site && site.name, true);
+    add('kousyu', '工　種', b.kousyu, true);
+    add('shubetsu', '種　別', b.shubetsu, false);
+    add('sokuten', '測　点', b.sokuten, true);
+    if (show.date) add('date', '撮影日', formatDate(date || new Date(), set.dateFmt), true);
+    add('contractor', '受注者', site && site.contractor, false);
+    let body = [];
     if (show.naiyou !== false) {
-      const lines = String(b.naiyou || '').replace(/\r/g, '').split('\n');
-      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-      while (lines.length && !lines[0].trim()) lines.shift();
-      if (lines.length) out.push({ kind: 'body', lines });
+      body = String(b.naiyou || '').replace(/\r/g, '').split('\n');
+      while (body.length && !body[body.length - 1].trim()) body.pop();
+      while (body.length && !body[0].trim()) body.shift();
     }
-    if (show.date !== false) out.push({ kind: 'row', label: '撮影日', value: formatDate(date || new Date(), set.dateFmt) });
-    add('contractor', '受注者', site && site.contractor);
-    return out;
+    return { heads, body };
   }
 
-  function metrics(W) {
-    const u = W / 24;
-    return {
-      u,
-      frame: u * 0.42,
-      rowH: u * 2.05,
-      lineH: u * 1.75,
-      labelW: W * 0.2,
-      font: u * 1.08,
-      lw: Math.max(1, u * 0.09)
-    };
+  function headsHeight(data, W) {
+    return data.heads.reduce((h, r) => h + (r.koji ? R.rowKoji : R.row) * W, 0);
   }
 
-  function bodyHeight(m, lines) { return lines.length * m.lineH + m.u * 0.3; }
-
-  function measure(list, W) {
-    const m = metrics(W);
-    let h = m.frame * 2;
-    for (const r of list) h += r.kind === 'row' ? m.rowH : bodyHeight(m, r.lines);
-    if (!list.length) h += m.rowH;
-    return Math.ceil(h);
+  function measure(data, W) {
+    // 基本は元写真の縦横比。項目や内容の行が多いときだけ下に伸ばす
+    const needBody = Math.max(W * R.bodyMin, data.body.length * W * 0.1 + W * 0.04);
+    return Math.ceil(Math.max(W * R.aspect, W * R.margin * 2 + headsHeight(data, W) + needBody));
   }
 
-  function fitText(ctx, text, x, y, maxW, align) {
+  function font(px) { return 'bold ' + px.toFixed(2) + 'px ' + FONT; }
+
+  /** 幅に入らなければ文字を小さくし、それでもだめなら横に詰める */
+  function fitText(ctx, text, x, y, maxW, px, align, minRatio) {
+    ctx.font = font(px);
+    let w = ctx.measureText(text).width;
+    if (w > maxW) {
+      const k = Math.max(minRatio || 0.75, maxW / w);
+      ctx.font = font(px * k);
+      w = ctx.measureText(text).width;
+    }
     ctx.textAlign = align || 'left';
-    const w = ctx.measureText(text).width;
-    if (w <= maxW) { ctx.fillText(text, x, y); return; }
-    ctx.fillText(text, x, y, maxW); // 横方向に詰めて入れる
+    if (w <= maxW) ctx.fillText(text, x, y);
+    else ctx.fillText(text, x, y, maxW);
   }
 
-  /** (x,y) を左上に幅 W で描く。描いた高さを返す */
-  function draw(ctx, x, y, W, list, theme) {
-    const t = THEMES[theme] || THEMES.green;
-    const m = metrics(W);
-    const H = measure(list, W);
-    ctx.save();
-    ctx.textBaseline = 'middle';
-
-    // 枠と面
-    ctx.fillStyle = t.frame;
-    ctx.fillRect(x, y, W, H);
-    const ix = x + m.frame, iy = y + m.frame, iw = W - m.frame * 2;
-    ctx.fillStyle = t.bg;
-    ctx.fillRect(ix, iy, iw, H - m.frame * 2);
-
-    ctx.strokeStyle = t.line;
-    ctx.lineWidth = m.lw;
-    const pad = m.u * 0.55;
-    let cy = iy;
-    list.forEach((r, i) => {
-      if (r.kind === 'row') {
-        ctx.font = 'bold ' + (m.font * 0.92) + 'px ' + FONT;
-        ctx.fillStyle = t.label;
-        fitText(ctx, r.label, ix + m.labelW / 2, cy + m.rowH / 2, m.labelW - pad, 'center');
-        ctx.font = 'bold ' + m.font + 'px ' + FONT;
-        ctx.fillStyle = t.text;
-        fitText(ctx, r.value, ix + m.labelW + pad, cy + m.rowH / 2, iw - m.labelW - pad * 2, 'left');
-        line(ctx, ix + m.labelW, cy, ix + m.labelW, cy + m.rowH);
-        cy += m.rowH;
-      } else {
-        const bh = bodyHeight(m, r.lines);
-        let ly = cy + m.u * 0.15;
-        ctx.font = 'bold ' + (m.font * 0.95) + 'px ' + FONT;
-        ctx.fillStyle = t.text;
-        r.lines.forEach((ln, k) => {
-          const cells = ln.split(/[|｜]/);
-          if (cells.length > 1) {
-            // 「項目|設計|実測」のような表形式
-            const first = iw * 0.3;
-            const rest = (iw - first) / (cells.length - 1);
-            cells.forEach((c, j) => {
-              const cx0 = j === 0 ? ix : ix + first + rest * (j - 1);
-              const cw = j === 0 ? first : rest;
-              fitText(ctx, c.trim(), cx0 + cw / 2, ly + m.lineH / 2, cw - pad, 'center');
-              if (j > 0) line(ctx, cx0, ly, cx0, ly + m.lineH);
-            });
-            if (k < r.lines.length - 1) line(ctx, ix, ly + m.lineH, ix + iw, ly + m.lineH);
-            if (k > 0) line(ctx, ix, ly, ix + iw, ly);
-          } else {
-            fitText(ctx, ln, ix + pad, ly + m.lineH / 2, iw - pad * 2, 'left');
-          }
-          ly += m.lineH;
-        });
-        cy += bh;
-      }
-      if (i < list.length - 1) line(ctx, ix, cy, ix + iw, cy);
-    });
-    ctx.strokeRect(ix, iy, iw, H - m.frame * 2);
-    ctx.restore();
-    return H;
+  /** 文字単位で折り返す（最大 n 行） */
+  function wrap(ctx, text, maxW, n) {
+    const out = [];
+    let cur = '';
+    for (const ch of text) {
+      if (ctx.measureText(cur + ch).width > maxW && cur) {
+        out.push(cur); cur = ch;
+        if (out.length === n - 1) { cur = text.slice(out.join('').length); break; }
+      } else cur += ch;
+    }
+    out.push(cur);
+    return out;
   }
 
   function line(ctx, x1, y1, x2, y2) {
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+
+  /** (x,y) を左上に幅 W で描く。描いた高さを返す */
+  function draw(ctx, x, y, W, data, theme) {
+    const t = THEMES[theme] || THEMES.green;
+    const H = measure(data, W);
+    const m = W * R.margin;
+    const ix = x + m, iy = y + m, iw = W - 2 * m, ih = H - 2 * m;
+    const lw = Math.max(1, W * R.lw);
+    const labW = W * R.labelW;
+    const pad = W * 0.03;
+
+    ctx.save();
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = t.bg;
+    ctx.fillRect(x, y, W, H);
+    ctx.strokeStyle = t.line;
+    ctx.lineWidth = lw;
+
+    // 見出し行
+    let cy = iy;
+    data.heads.forEach(r => {
+      const rh = (r.koji ? R.rowKoji : R.row) * W;
+      ctx.fillStyle = t.label;
+      fitText(ctx, r.label, ix + labW / 2, cy + rh / 2, labW - pad, W * R.label, 'center');
+      ctx.fillStyle = t.text;
+      const vx = ix + labW + pad, vw = iw - labW - pad * 1.5;
+      if (r.koji) {
+        ctx.font = font(W * R.value);
+        if (ctx.measureText(r.value).width <= vw) {
+          fitText(ctx, r.value, vx, cy + rh / 2, vw, W * R.value);
+        } else {
+          ctx.font = font(W * R.koji);
+          const ls = wrap(ctx, r.value, vw, 2);
+          const lh = rh / 2.15;
+          ls.forEach((s, i) => fitText(ctx, s, vx, cy + rh / 2 + (i - (ls.length - 1) / 2) * lh, vw, W * R.koji, 'left', 0.6));
+        }
+      } else {
+        fitText(ctx, r.value, vx, cy + rh / 2, vw, W * R.value);
+      }
+      cy += rh;
+      line(ctx, ix, cy, ix + iw, cy);
+    });
+    if (data.heads.length) line(ctx, ix + labW, iy, ix + labW, cy);
+
+    // 内容欄
+    const by = cy, bh = iy + ih - cy;
+    const body = data.body;
+    if (body.length) {
+      const isTable = body.map(s => /[|｜]/.test(s));
+      const anyTable = isTable.some(Boolean);
+      const lh = Math.min(bh * 0.92 / body.length, anyTable ? W * 0.15 : W * R.body * 1.5);
+      let px = Math.min(W * R.body, lh / 1.3);
+      // いちばん長い行が幅に収まる大きさまで下げる
+      ctx.font = font(px);
+      const longest = Math.max(...body.map((s, i) => isTable[i] ? 0 : ctx.measureText(s).width));
+      if (longest > iw * 0.92) px = Math.max(px * (iw * 0.92) / longest, W * 0.05);
+      const top = by + (bh - lh * body.length) / 2;
+      ctx.fillStyle = t.text;
+      body.forEach((s, i) => {
+        const ly = top + lh * i;
+        if (isTable[i]) {
+          const cells = s.split(/[|｜]/);
+          const cw = iw / cells.length;
+          const tpx = Math.min(px, lh / 1.5);
+          cells.forEach((c, j) => {
+            fitText(ctx, c.trim(), ix + cw * j + cw / 2, ly + lh / 2, cw - pad, tpx, 'center', 0.6);
+            if (j > 0) line(ctx, ix + cw * j, ly, ix + cw * j, ly + lh);
+          });
+          if (i === 0 || !isTable[i - 1]) line(ctx, ix, ly, ix + iw, ly);
+          line(ctx, ix, ly + lh, ix + iw, ly + lh);
+        } else {
+          fitText(ctx, s, ix + iw / 2, ly + lh / 2, iw - pad * 2, px, 'center', 0.5);
+        }
+      });
+    }
+    ctx.strokeRect(ix, iy, iw, ih);
+    ctx.restore();
+    return H;
   }
 
   return { rows, measure, draw, formatDate, THEMES };

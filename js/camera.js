@@ -87,16 +87,26 @@ const Camera = (() => {
     return { src: video, w: vw, h: vh, still: false };
   }
 
-  /** 中央を outW:outH の比で切り出して outW×outH の canvas に描く */
-  function cropTo(source, outW, outH) {
-    const ar = outW / outH;
-    let cw = source.w, ch = cw / ar;
-    if (ch > source.h) { ch = source.h; cw = ch * ar; }
-    const cx = (source.w - cw) / 2, cy = (source.h - ch) / 2;
+  /** 回転 rot（0/90/180/270）で正立させたときに outW×outH になるよう、
+      映像の中央を切り出す。返す cw,ch は映像上（回転前）の切り出し寸法 */
+  function cropRect(sw0, sh0, outW, outH, rot) {
+    const odd = rot === 90 || rot === 270;
+    const tw = odd ? outH : outW, th = odd ? outW : outH; // 映像上での縦横
+    const ar = tw / th;
+    let cw = sw0, ch = cw / ar;
+    if (ch > sh0) { ch = sh0; cw = ch * ar; }
+    return { cx: (sw0 - cw) / 2, cy: (sh0 - ch) / 2, cw, ch, tw, th };
+  }
+
+  /** 映像を正立させ、中央を切り出して outW×outH の canvas に描く。
+      rot=90 は「スマホを左に倒した（上端が左）」とき：映像の右側が上になるよう左へ回す */
+  function cropTo(source, outW, outH, rot) {
+    rot = rot || 0;
+    const { cx, cy, cw, ch, tw, th } = cropRect(source.w, source.h, outW, outH, rot);
 
     // 大きく縮めるときは半分ずつ縮めて画質を保つ
     let img = source.src, sx = cx, sy = cy, sw = cw, sh = ch;
-    while (sw / 2 >= outW * 1.0 && sh / 2 >= outH * 1.0) {
+    while (sw / 2 >= tw && sh / 2 >= th) {
       const c = document.createElement('canvas');
       c.width = Math.round(sw / 2); c.height = Math.round(sh / 2);
       const g = c.getContext('2d');
@@ -108,9 +118,16 @@ const Camera = (() => {
     out.width = outW; out.height = outH;
     const ctx = out.getContext('2d');
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH);
-    return { canvas: out, ctx, srcCropW: Math.round(cw), srcCropH: Math.round(ch) };
+    ctx.save();
+    if (rot === 90) { ctx.translate(0, outH); ctx.rotate(-Math.PI / 2); }
+    else if (rot === 270) { ctx.translate(outW, 0); ctx.rotate(Math.PI / 2); }
+    else if (rot === 180) { ctx.translate(outW, outH); ctx.rotate(Math.PI); }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
+    ctx.restore();
+    // 拡大になっているかの判定用に、正立後の向きでの切り出し幅を返す
+    const odd = rot === 90 || rot === 270;
+    return { canvas: out, ctx, srcCropW: Math.round(odd ? ch : cw), srcCropH: Math.round(odd ? cw : ch) };
   }
 
-  return { supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo };
+  return { supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo, cropRect };
 })();

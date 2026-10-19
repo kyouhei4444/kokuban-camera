@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.0.1';
+  const VERSION = '1.1.0';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -249,7 +249,7 @@
     Board.draw(g, 0, 0, cssW, list, set.theme);
   }
 
-  $('btn-camera').onclick = () => go('camera');
+  $('btn-camera').onclick = () => { askMotion(); go('camera'); };
   $('btn-gallery').onclick = () => go('gallery');
 
   function remember(s) {
@@ -263,13 +263,51 @@
   }
 
   // ---------- カメラ ----------
+  // スマホの持ち方（縦・横）は傾きセンサーで判定する。
+  // 画面の自動回転がオフでも、横に倒して撮れば横の写真になるよう、映像を回して保存する。
+  //   devAngle … 端末の向き（0=縦, 90=左に倒す〈上端が左〉, 270=右に倒す, 180=逆さ）
+  //   rot      … 映像を正立させるのに要る回転（devAngle − 画面の回転角）
+  let devAngle = 0;
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  function screenAngle() {
+    const a = screen.orientation && typeof screen.orientation.angle === 'number' ? screen.orientation.angle : (window.orientation || 0);
+    return ((a % 360) + 360) % 360;
+  }
+  function curRot() { return ((devAngle - screenAngle()) % 360 + 360) % 360; }
+  function onMotion(e) {
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x == null || g.y == null) return;
+    let x = g.x, y = g.y;
+    if (isIOS) { x = -x; y = -y; } // iOS は符号が逆
+    if (Math.hypot(x, y) < 4.5) return; // 地面に向けて平らに持っているときは今の向きのまま
+    const deg = ((Math.atan2(x, y) * 180 / Math.PI) + 360) % 360;
+    const snap = (Math.round(deg / 90) * 90) % 360;
+    let diff = Math.abs(deg - snap); if (diff > 180) diff = 360 - diff;
+    if (diff > 30 || snap === devAngle) return; // 斜めのときは切り替えない
+    devAngle = snap;
+    if (camOpen) layoutFrame();
+  }
+  window.addEventListener('devicemotion', onMotion);
+  // iPhone は利用者の操作の中で許可を取る必要がある
+  function askMotion() {
+    if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+      DeviceMotionEvent.requestPermission().catch(() => {});
+    }
+  }
+  window.addEventListener('orientationchange', () => { if (camOpen) setTimeout(layoutFrame, 300); });
+
+  /** 正立した保存画像の寸法 [W,H] */
   function outSize() {
-    let [w, h] = resWH(set.res);
+    const [w, h] = resWH(set.res);
     const v = $('cam-video');
     let portrait;
     if (set.orient === 'portrait') portrait = true;
     else if (set.orient === 'landscape') portrait = false;
-    else portrait = v.videoWidth && v.videoHeight ? v.videoHeight > v.videoWidth : window.innerHeight > window.innerWidth;
+    else {
+      const vw = v.videoWidth || window.innerWidth, vh = v.videoHeight || window.innerHeight;
+      const odd = curRot() % 180 !== 0;
+      portrait = odd ? vw > vh : vh > vw;
+    }
     return portrait ? [h, w] : [w, h];
   }
   function boardWidth(W, H) { return Math.min(set.boardScale * Math.max(W, H), W * 0.98); }
@@ -328,76 +366,132 @@
     $('cam-sk').textContent = [b.kousyu, b.sokuten].filter(Boolean).join(' ／ ') || '黒板を編集';
   }
 
+  // 画面上の枠は「映像上の切り出し範囲」の形。横持ちで画面が縦のままなら縦長の枠になる
+  let view = { rot: 0, fw: 0, fh: 0, W: 0, H: 0 }; // W,H は正立後のプレビュー寸法
   function layoutFrame() {
     if (!camOpen) return;
     const area = $('cam-area');
     const [W, H] = outSize();
+    const rot = curRot();
+    const odd = rot % 180 !== 0;
+    const sw = odd ? H : W, sh = odd ? W : H; // 画面上での縦横比
     const aw = area.clientWidth, ah = area.clientHeight;
-    let fw = aw, fh = aw * H / W;
-    if (fh > ah) { fh = ah; fw = ah * W / H; }
+    let fw = aw, fh = aw * sh / sw;
+    if (fh > ah) { fh = ah; fw = ah * sw / sh; }
+    fw = Math.floor(fw); fh = Math.floor(fh);
     const f = $('cam-frame');
-    f.style.width = Math.floor(fw) + 'px';
-    f.style.height = Math.floor(fh) + 'px';
-    $('cam-res').textContent = W + '×' + H;
+    f.style.width = fw + 'px';
+    f.style.height = fh + 'px';
+    view = { rot, fw, fh, W: odd ? fh : fw, H: odd ? fw : fh };
+    $('cam-res').textContent = W + '×' + H + (W > H ? ' 横' : ' 縦');
     const v = $('cam-video');
     if (v.videoWidth) {
-      const ar = W / H;
-      let cw = v.videoWidth, ch = cw / ar;
-      if (ch > v.videoHeight) { ch = v.videoHeight; cw = ch * ar; }
-      const up = cw < W - 1;
+      const r = Camera.cropRect(v.videoWidth, v.videoHeight, W, H, rot);
+      const up = (odd ? r.ch : r.cw) < W - 1;
       $('cam-src').textContent = '映像 ' + v.videoWidth + '×' + v.videoHeight + (up ? '（拡大）' : '');
     }
     layoutBoard();
+  }
+
+  // 正立座標 (u,v) → 画面の枠内座標 の変換（canvas の setTransform 用の係数）
+  function uprightToScreen() {
+    const { rot, W, H } = view;
+    if (rot === 90) return [0, 1, -1, 0, H, 0];
+    if (rot === 270) return [0, -1, 1, 0, 0, W];
+    if (rot === 180) return [-1, 0, 0, -1, W, H];
+    return [1, 0, 0, 1, 0, 0];
+  }
+  // 画面の枠内座標 → 正立座標
+  function screenToUpright(x, y) {
+    const { rot, W, H } = view;
+    if (rot === 90) return [y, H - x];
+    if (rot === 270) return [W - y, x];
+    if (rot === 180) return [W - x, H - y];
+    return [x, y];
+  }
+  function boardRect() {
+    const bw = boardWidth(view.W, view.H);
+    const bh = Board.measure(boardRows(), bw);
+    return { x: Math.max(0, set.boardFx * (view.W - bw)), y: Math.max(0, set.boardFy * (view.H - bh)), w: bw, h: bh };
   }
 
   function layoutBoard() {
     const c = $('cam-board');
     if (!camOpen) return;
     c.classList.toggle('hidden', !set.boardShow);
-    if (!set.boardShow) return;
-    const f = $('cam-frame');
-    const fw = f.clientWidth, fh = f.clientHeight;
-    if (!fw || !fh) return;
-    const bw = boardWidth(fw, fh);
-    const list = boardRows();
-    const bh = Board.measure(list, bw);
+    if (!set.boardShow || !view.fw) return;
     const dpr = window.devicePixelRatio || 1;
-    c.width = Math.round(bw * dpr); c.height = Math.round(bh * dpr);
-    c.style.width = bw + 'px'; c.style.height = bh + 'px';
+    c.width = Math.round(view.fw * dpr); c.height = Math.round(view.fh * dpr);
+    c.style.width = view.fw + 'px'; c.style.height = view.fh + 'px';
     const g = c.getContext('2d');
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    Board.draw(g, 0, 0, bw, list, set.theme);
-    c.style.left = Math.max(0, set.boardFx * (fw - bw)) + 'px';
-    c.style.top = Math.max(0, set.boardFy * (fh - bh)) + 'px';
+    const [a, b, cc, d, e, f] = uprightToScreen();
+    g.setTransform(a * dpr, b * dpr, cc * dpr, d * dpr, e * dpr, f * dpr);
+    const r = boardRect();
+    Board.draw(g, r.x, r.y, r.w, boardRows(), set.theme);
+    if (dragging) {
+      g.strokeStyle = '#ffd23f'; g.lineWidth = 2; g.setLineDash([6, 4]);
+      g.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+    }
   }
 
-  // 黒板のドラッグ
+  // 黒板の移動（1本指でドラッグ）と大きさ（2本指でつまむ）
+  let dragging = false;
   (() => {
     const c = $('cam-board');
-    let drag = null;
+    const pts = new Map();
+    let drag = null, pinch = null;
+    const local = e => {
+      const r = c.getBoundingClientRect();
+      return screenToUpright(e.clientX - r.left, e.clientY - r.top);
+    };
+    const dist = () => { const [p, q] = [...pts.values()]; return Math.hypot(p.x - q.x, p.y - q.y); };
     c.addEventListener('pointerdown', e => {
       e.preventDefault();
-      c.setPointerCapture(e.pointerId);
-      drag = { x: e.clientX, y: e.clientY, l: c.offsetLeft, t: c.offsetTop };
-      c.classList.add('dragging');
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      try { c.setPointerCapture(e.pointerId); } catch (err) {}
+      if (pts.size === 2) {
+        drag = null;
+        pinch = { d: dist(), scale: set.boardScale };
+        dragging = true;
+        layoutBoard();
+      } else if (pts.size === 1) {
+        const [u, v] = local(e);
+        const r = boardRect();
+        if (u >= r.x && u <= r.x + r.w && v >= r.y && v <= r.y + r.h) {
+          drag = { u, v, x: r.x, y: r.y };
+          dragging = true;
+          layoutBoard();
+        }
+      }
     });
     c.addEventListener('pointermove', e => {
-      if (!drag) return;
-      const f = $('cam-frame');
-      const fw = f.clientWidth, fh = f.clientHeight, bw = c.offsetWidth, bh = c.offsetHeight;
-      const l = Math.min(Math.max(0, drag.l + e.clientX - drag.x), Math.max(0, fw - bw));
-      const t = Math.min(Math.max(0, drag.t + e.clientY - drag.y), Math.max(0, fh - bh));
-      c.style.left = l + 'px'; c.style.top = t + 'px';
-      set.boardFx = fw > bw ? l / (fw - bw) : 0;
-      set.boardFy = fh > bh ? t / (fh - bh) : 0;
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && pts.size >= 2) {
+        const k = dist() / (pinch.d || 1);
+        set.boardScale = Math.min(0.9, Math.max(0.1, pinch.scale * k));
+        layoutBoard();
+      } else if (drag) {
+        const [u, v] = local(e);
+        const r = boardRect();
+        const x = Math.min(Math.max(0, drag.x + u - drag.u), Math.max(0, view.W - r.w));
+        const y = Math.min(Math.max(0, drag.y + v - drag.v), Math.max(0, view.H - r.h));
+        set.boardFx = view.W > r.w ? x / (view.W - r.w) : 0;
+        set.boardFy = view.H > r.h ? y / (view.H - r.h) : 0;
+        layoutBoard();
+      }
     });
-    const end = () => { if (drag) { drag = null; c.classList.remove('dragging'); saveSet(); } };
+    const end = e => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinch = null;
+      if (!pts.size && dragging) { dragging = false; drag = null; saveSet(); layoutBoard(); }
+    };
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
   })();
 
   function scaleBoard(k) {
-    set.boardScale = Math.min(0.9, Math.max(0.18, set.boardScale * k));
+    set.boardScale = Math.min(0.9, Math.max(0.1, set.boardScale * k));
     saveSet();
     layoutBoard();
   }
@@ -465,7 +559,7 @@
       if (set.sound) click();
       const [W, H] = outSize();
       const src = await Camera.grabSource(v, set.stillMode);
-      const { canvas, ctx, srcCropW } = Camera.cropTo(src, W, H);
+      const { canvas, ctx, srcCropW } = Camera.cropTo(src, W, H, curRot());
       if (src.still && src.src.close) src.src.close();
 
       const s = ensureSite(curSite());
@@ -872,5 +966,5 @@
   window.addEventListener('resize', () => { if ($('view-board').classList.contains('active')) drawPreview(); });
 
   // テスト用に一部を公開
-  window.__kc = { stepNo, outSize, boardRows, shoot, go, openSite, get set() { return set; } };
+  window.__kc = { stepNo, outSize, boardRows, shoot, go, openSite, curRot, get set() { return set; }, setDevAngle(a) { devAngle = a; layoutFrame(); } };
 })();

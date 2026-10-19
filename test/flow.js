@@ -23,12 +23,12 @@
     // 現場登録
     $('btn-site-add').click();
     await wait(100);
-    type($('d-name'), 'テスト道路改良工事');
+    type($('d-name'), '（主）韮崎昇仙峡線　道路工事２工区（一部債務）（余フ）');
     type($('d-contractor'), 'テスト建設株式会社');
     $('d-save').click();
     await wait(200);
     ok('黒板入力画面へ', $('view-board').classList.contains('active'));
-    ok('タイトルに工事名', $('tb-title').textContent === 'テスト道路改良工事');
+    ok('タイトルに工事名', $('tb-title').textContent.startsWith('（主）韮崎'));
 
     type($('f-kousyu'), '擁壁工');
     type($('f-shubetsu'), '床掘り');
@@ -37,8 +37,26 @@
     document.querySelector('[data-step="1"]').click();
     ok('測点▶で No.6', $('f-sokuten').value === 'No.6', $('f-sokuten').value);
     const rows = __kc.boardRows(new Date(2026, 9, 19));
-    ok('黒板の行', rows.map(r => r.label || 'body').join(',') === '工事名,工　種,種　別,測　点,body,撮影日,受注者', rows.map(r => r.label || 'body').join(','));
-    // 黒板プレビュー画像
+    ok('黒板の見出し', rows.heads.map(r => r.label).join(',') === '工事名,工　種,種　別,測　点', rows.heads.map(r => r.label).join(','));
+    ok('黒板の内容4行', rows.body.length === 4);
+    ok('黒板の既定の大きさ', Math.abs(__kc.set.boardScale - 0.231) < 1e-9);
+
+    // 回転の向き：映像フレームの右半分を赤にした縦長の元画像
+    const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'); g.fillStyle = '#00f'; g.fillRect(0, 0, w, h); g.fillStyle = '#f00'; g.fillRect(w / 2, 0, w / 2, h); return c; };
+    const px = (c, x, y) => Array.from(c.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3));
+    const src = { src: mk(300, 400), w: 300, h: 400 };
+    let o = Camera.cropTo(src, 400, 300, 90).canvas;   // 左に倒した：映像の右 → 上
+    ok('rot90 右→上', px(o, 200, 10)[0] > 200 && px(o, 200, 290)[2] > 200, JSON.stringify([px(o, 200, 10), px(o, 200, 290)]));
+    o = Camera.cropTo(src, 400, 300, 270).canvas;      // 右に倒した：映像の右 → 下
+    ok('rot270 右→下', px(o, 200, 290)[0] > 200 && px(o, 200, 10)[2] > 200);
+    o = Camera.cropTo(src, 300, 400, 180).canvas;      // 逆さ：右 → 左
+    ok('rot180 右→左', px(o, 10, 200)[0] > 200 && px(o, 290, 200)[2] > 200);
+    o = Camera.cropTo(src, 300, 400, 0).canvas;
+    ok('rot0 そのまま', px(o, 290, 200)[0] > 200);
+    // 黒板プレビュー画像（元写真と同じ内容でも1枚）
+    type($('f-naiyou'), '伐採状況'); type($('f-kousyu'), '伐採工'); const sk = $('f-sokuten').value; type($('f-sokuten'), '');
+    await post('/file/preview_bassai.png', await new Promise(r => $('board-preview').toBlob(r, 'image/png')));
+    type($('f-naiyou'), '床掘り完了\n項目|設計|実測\n幅 W|1.20|1.22\n深さ H|0.80|0.81'); type($('f-kousyu'), '擁壁工'); type($('f-sokuten'), sk);
     await post('/file/preview.png', await new Promise(r => $('board-preview').toBlob(r, 'image/png')));
 
     // カメラ
@@ -64,6 +82,16 @@
     await post('/file/photo.jpg', p.blob);
     await post('/meta/photo.json', JSON.stringify({ sha256: p.sha256, takenAt: p.takenAt, name: p.name }));
 
+    // 横に倒した（映像は横長のまま回転 90）→ 正立で縦長になる。プレビュー枠は映像上の形（横長）
+    __kc.setDevAngle(90);
+    ok('回転90の出力', __kc.curRot() === 90 && __kc.outSize().join('x') === '960x1280', __kc.curRot() + ' ' + __kc.outSize().join('x'));
+    ok('回転90の枠', f.clientWidth > f.clientHeight, f.clientWidth + 'x' + f.clientHeight);
+    await post('/file/preview_rot90.png', await new Promise(r => $('cam-board').toBlob(r, 'image/png')));
+    await __kc.shoot();
+    await post('/file/photo_rot90.jpg', (await Store.listPhotos(site.id))[0].blob);
+    __kc.setDevAngle(0);
+    photos = await Store.listPhotos(site.id);
+
     // 縦向き・別画素数
     __kc.set.orient = 'portrait'; __kc.set.res = '2048x1536';
     ok('縦 2048', __kc.outSize().join('x') === '1536x2048');
@@ -75,8 +103,8 @@
 
     // 写真一覧 → ZIP
     __kc.go('gallery');
-    await until(() => document.querySelectorAll('.gal-item').length === 2, 4000);
-    ok('一覧に2枚', document.querySelectorAll('.gal-item').length === 2);
+    await until(() => document.querySelectorAll('.gal-item').length === 3, 4000);
+    ok('一覧に3枚', document.querySelectorAll('.gal-item').length === 3);
     const files = [];
     for (const q of photos) files.push({ name: q.name, data: new Uint8Array(await q.blob.arrayBuffer()), date: new Date(q.takenAt) });
     files.push({ name: '撮影台帳.csv', data: new TextEncoder().encode('﻿a,b\r\n'), date: new Date() });

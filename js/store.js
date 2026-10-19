@@ -6,17 +6,19 @@
 const Store = (() => {
   const K_SITES = 'kc.sites', K_SET = 'kc.settings';
 
+  const LAYOUT_VER = 2;
   const DEFAULTS = {
+    layoutVer: LAYOUT_VER,
     res: '1280x960',
     quality: 0.92,
     orient: 'auto',
-    boardScale: 0.4,
+    boardScale: 0.231,   // 黒板の幅 / 写真の長辺（1280 に対して 296px）
     boardFx: 0,
     boardFy: 1,
     boardShow: true,
     theme: 'green',
     dateFmt: 'wareki',
-    rows: { koji: true, kousyu: true, shubetsu: true, sokuten: true, naiyou: true, date: true, contractor: true },
+    rows: { koji: true, kousyu: true, shubetsu: true, sokuten: true, naiyou: true, date: false, contractor: false },
     autoDownload: true,
     gps: false,
     stillMode: false,
@@ -33,6 +35,12 @@ const Store = (() => {
   function settings() {
     const s = Object.assign({}, DEFAULTS, read(K_SET, {}));
     s.rows = Object.assign({}, DEFAULTS.rows, s.rows || {});
+    if ((s.layoutVer || 1) < LAYOUT_VER) {
+      // 黒板の形を現場の様式に合わせた版。大きさ・位置・項目を新しい既定に戻す
+      ['boardScale', 'boardFx', 'boardFy', 'theme', 'layoutVer'].forEach(k => { s[k] = DEFAULTS[k]; });
+      s.rows = Object.assign({}, DEFAULTS.rows);
+      write(K_SET, s);
+    }
     return s;
   }
   function saveSettings(s) { return write(K_SET, s); }
