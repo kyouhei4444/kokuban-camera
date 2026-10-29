@@ -112,6 +112,7 @@ const Camera = (() => {
       const g = c.getContext('2d');
       g.imageSmoothingQuality = 'high';
       g.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      if (img !== source.src) release(img);
       img = c; sx = 0; sy = 0; sw = c.width; sh = c.height;
     }
     const out = document.createElement('canvas');
@@ -124,10 +125,17 @@ const Camera = (() => {
     else if (rot === 180) { ctx.translate(outW, outH); ctx.rotate(Math.PI); }
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
     ctx.restore();
+    if (img !== source.src) release(img);
     // 拡大になっているかの判定用に、正立後の向きでの切り出し幅を返す
     const odd = rot === 90 || rot === 270;
     return { canvas: out, ctx, srcCropW: Math.round(odd ? ch : cw), srcCropH: Math.round(odd ? cw : ch) };
   }
 
-  return { supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo, cropRect };
+  /** 作業用 canvas のメモリをすぐ返す。
+      低性能の Android では GC を待つ間にカメラ映像と合わせてメモリが尽き、画面が固まることがある */
+  function release(c) {
+    if (c && 'width' in c) { c.width = 0; c.height = 0; }
+  }
+
+  return { supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo, cropRect, release };
 })();

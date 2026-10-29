@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.1.0';
+  const VERSION = '1.1.1';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -16,6 +16,7 @@
   const $ = id => document.getElementById(id);
   let set = Store.settings();
   let curSiteId = null;
+  let pending = null; // 入力途中でまだ保存していない現場（curSite() はこちらを優先して返す）
   let camOpen = false, camInfo = null, busy = false;
   let gpsWatch = null, gpsLast = null;
   let wakeLock = null;
@@ -39,7 +40,10 @@
   function fmtDateTime(d) { return d.getFullYear() + '/' + p2(d.getMonth() + 1) + '/' + p2(d.getDate()) + ' ' + p2(d.getHours()) + ':' + p2(d.getMinutes()) + ':' + p2(d.getSeconds()); }
   function resWH(r) { const [w, h] = r.split('x').map(Number); return [w, h]; }
   function saveSet() { Store.saveSettings(set); }
-  function curSite() { return curSiteId ? Store.site(curSiteId) : null; }
+  function curSite() {
+    if (pending && pending.id === curSiteId) return pending;
+    return curSiteId ? Store.site(curSiteId) : null;
+  }
   function ensureSite(s) {
     s.board = Object.assign({ kousyu: '', shubetsu: '', sokuten: '', naiyou: '' }, s.board || {});
     s.hist = Object.assign({ kousyu: [], shubetsu: [], sokuten: [], naiyou: [] }, s.hist || {});
@@ -65,6 +69,7 @@
   });
 
   function render(v) {
+    flushSite();
     if ((v === 'board' || v === 'gallery' || v === 'camera') && !curSite()) v = 'home';
     if (v !== 'camera' && camOpen) closeCamera();
     ['home', 'board', 'gallery'].forEach(n => $('view-' + n).classList.toggle('active', n === v));
@@ -133,6 +138,7 @@
   }
 
   function siteDialog(s) {
+    flushSite();
     const isNew = !s;
     const last = Store.sites().slice(-1)[0];
     s = ensureSite(s ? JSON.parse(JSON.stringify(s)) : { id: uid(), name: '', contractor: last ? last.contractor : '', createdAt: Date.now() });
@@ -181,36 +187,58 @@
     Store.countPhotos(s.id).then(n => { $('cnt-photos').textContent = n; }).catch(() => {});
   }
 
-  function fillLists(s) {
-    const opts = arr => arr.map(v => `<option value="${esc(v)}">`).join('');
+  // 入力の候補は下のチップで出す（<datalist> は Android の Chrome で入力が固まることがあるので使わない）
+  function chipLists(s) {
     const kous = [...s.hist.kousyu, ...KOUSYU_DEFAULT.filter(k => !s.hist.kousyu.includes(k))];
-    $('dl-kousyu').innerHTML = opts(kous);
-    $('dl-shubetsu').innerHTML = opts(s.hist.shubetsu);
-    $('dl-sokuten').innerHTML = opts(s.hist.sokuten);
-    chips('chips-kousyu', (s.hist.kousyu.length ? s.hist.kousyu : KOUSYU_DEFAULT).slice(0, 12), 'kousyu');
-    chips('chips-sokuten', s.hist.sokuten.slice(0, 10), 'sokuten');
-    chips('chips-naiyou', s.hist.naiyou.slice(0, 8), 'naiyou');
+    return {
+      kousyu: kous.slice(0, 14),
+      shubetsu: s.hist.shubetsu.slice(0, 10),
+      sokuten: s.hist.sokuten.slice(0, 10),
+      naiyou: s.hist.naiyou.slice(0, 8)
+    };
   }
-  function chips(boxId, arr, field) {
-    $(boxId).innerHTML = arr.map((v, i) => `<button class="chip" data-f="${field}" data-i="${i}">${esc(v.split('\n')[0] || v)}${v.includes('\n') ? '…' : ''}</button>`).join('');
-    $(boxId)._vals = arr;
+  function fillLists(s) {
+    const L = chipLists(s);
+    FIELDS.forEach(k => chips('chips-' + k, L[k], k, 'f-'));
   }
-  ['chips-kousyu', 'chips-sokuten', 'chips-naiyou'].forEach(id => {
-    $(id).addEventListener('click', e => {
+  function chips(boxId, arr, field, prefix) {
+    const box = $(boxId);
+    if (!box) return;
+    box.innerHTML = arr.map((v, i) => `<button type="button" class="chip" data-i="${i}">${esc(v.split('\n')[0] || v)}${v.includes('\n') ? '…' : ''}</button>`).join('');
+    box.onclick = e => {
       const b = e.target.closest('.chip');
       if (!b) return;
-      setField(b.dataset.f, $(id)._vals[+b.dataset.i]);
-      $('f-' + b.dataset.f).value = curSite().board[b.dataset.f];
-    });
-  });
+      const v = arr[+b.dataset.i];
+      setField(field, v);
+      const inp = $(prefix + field);
+      if (inp) inp.value = v;
+      if (prefix === 'q-') updateCamLabel();
+    };
+  }
 
+  // 1文字ごとの処理は軽くする：描き直しは次の描画フレームに1回、保存は入力が止まってから
+  let saveTimer = null, drawQueued = false;
   function setField(k, v) {
     const s = ensureSite(curSite());
     s.board[k] = v;
-    Store.putSite(s);
-    drawPreview();
-    if (camOpen) layoutBoard();
+    pending = s;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSite, 400);
+    if (!drawQueued) {
+      drawQueued = true;
+      requestAnimationFrame(() => {
+        drawQueued = false;
+        if ($('view-board').classList.contains('active') && !camOpen) drawPreview();
+        if (camOpen) layoutBoard();
+      });
+    }
   }
+  function flushSite() {
+    clearTimeout(saveTimer);
+    if (pending) { Store.putSite(pending); pending = null; }
+  }
+  window.addEventListener('pagehide', flushSite);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSite(); });
   FIELDS.forEach(k => $('f-' + k).addEventListener('input', e => setField(k, e.target.value)));
 
   function stepNo(s, d) {
@@ -235,21 +263,33 @@
     return Board.rows(s, s.board, set, date || new Date());
   }
 
+  // 高精細画面（DuraForce PRO 2 は約3倍）でも 2 倍までに抑える。canvas の作り直しは大きさが変わったときだけ
+  function pixelRatio() { return Math.min(2, window.devicePixelRatio || 1); }
+  function sizeCanvas(c, cssW, cssH, dpr) {
+    const w = Math.round(cssW * dpr), h = Math.round(cssH * dpr);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    c.style.width = cssW + 'px'; c.style.height = cssH + 'px';
+    const g = c.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return g;
+  }
+  function dlgOpen() { return !$('dlg').classList.contains('hidden'); }
+
   function drawPreview() {
     const c = $('board-preview');
     const wrap = c.parentElement;
-    const cssW = Math.min(wrap.clientWidth - 20 || 300, 520);
-    const dpr = window.devicePixelRatio || 1;
+    if (!wrap.clientWidth) return; // 画面が隠れているとき
+    const cssW = Math.max(120, Math.min(wrap.clientWidth - 20, 520));
+    const dpr = pixelRatio();
     const list = boardRows();
     const cssH = Board.measure(list, cssW);
-    c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
-    c.style.width = cssW + 'px'; c.style.height = cssH + 'px';
-    const g = c.getContext('2d');
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const g = sizeCanvas(c, cssW, cssH, dpr);
     Board.draw(g, 0, 0, cssW, list, set.theme);
   }
 
-  $('btn-camera').onclick = () => { askMotion(); go('camera'); };
+  $('btn-camera').onclick = () => { askMotion(); prepareSound(); go('camera'); };
   $('btn-gallery').onclick = () => go('gallery');
 
   function remember(s) {
@@ -285,7 +325,7 @@
     let diff = Math.abs(deg - snap); if (diff > 180) diff = 360 - diff;
     if (diff > 30 || snap === devAngle) return; // 斜めのときは切り替えない
     devAngle = snap;
-    if (camOpen) layoutFrame();
+    if (camOpen && !dlgOpen()) layoutFrame();
   }
   window.addEventListener('devicemotion', onMotion);
   // iPhone は利用者の操作の中で許可を取る必要がある
@@ -420,10 +460,8 @@
     if (!camOpen) return;
     c.classList.toggle('hidden', !set.boardShow);
     if (!set.boardShow || !view.fw) return;
-    const dpr = window.devicePixelRatio || 1;
-    c.width = Math.round(view.fw * dpr); c.height = Math.round(view.fh * dpr);
-    c.style.width = view.fw + 'px'; c.style.height = view.fh + 'px';
-    const g = c.getContext('2d');
+    const dpr = pixelRatio();
+    const g = sizeCanvas(c, view.fw, view.fh, dpr);
     const [a, b, cc, d, e, f] = uprightToScreen();
     g.setTransform(a * dpr, b * dpr, cc * dpr, d * dpr, e * dpr, f * dpr);
     const r = boardRect();
@@ -522,9 +560,10 @@
   $('cam-edit').onclick = () => quickEdit();
   $('cam-thumb').onclick = () => go('gallery');
   $('cam-shutter').onclick = shoot;
-  $('cam-video').addEventListener('resize', layoutFrame);
-  window.addEventListener('resize', () => { if (camOpen) layoutFrame(); });
-  if ('ResizeObserver' in window) new ResizeObserver(() => { if (camOpen) layoutFrame(); }).observe($('cam-area'));
+  $('cam-video').addEventListener('resize', () => { if (!dlgOpen()) layoutFrame(); });
+  // ダイアログで入力中はキーボードで画面の高さが変わるが、カメラ画面は組み直さない（閉じたときに1回だけ）
+  window.addEventListener('resize', () => { if (camOpen && !dlgOpen()) layoutFrame(); });
+  if ('ResizeObserver' in window) new ResizeObserver(() => { if (camOpen && !dlgOpen()) layoutFrame(); }).observe($('cam-area'));
 
   // 画素数を変えたら、それに見合う大きさの映像を頼み直す
   function restartIfNeeded() {
@@ -536,14 +575,23 @@
   function quickEdit() {
     const s = ensureSite(curSite());
     openDlg('黒板の編集', `
-      <label class="fld"><span>工種</span><input id="q-kousyu" list="dl-kousyu" autocomplete="off" value="${esc(s.board.kousyu)}"></label>
-      <label class="fld"><span>種別・細別</span><input id="q-shubetsu" list="dl-shubetsu" autocomplete="off" value="${esc(s.board.shubetsu)}"></label>
-      <label class="fld"><span>測点</span><input id="q-sokuten" list="dl-sokuten" autocomplete="off" value="${esc(s.board.sokuten)}"></label>
+      <label class="fld"><span>工種</span><input id="q-kousyu" autocomplete="off" value="${esc(s.board.kousyu)}"></label>
+      <div class="chips" id="qc-kousyu"></div>
+      <label class="fld"><span>種別・細別</span><input id="q-shubetsu" autocomplete="off" value="${esc(s.board.shubetsu)}"></label>
+      <div class="chips" id="qc-shubetsu"></div>
+      <label class="fld"><span>測点</span><input id="q-sokuten" autocomplete="off" value="${esc(s.board.sokuten)}"></label>
+      <div class="chips" id="qc-sokuten"></div>
       <label class="fld"><span>黒板内容（| で区切ると表）</span><textarea id="q-naiyou" rows="4">${esc(s.board.naiyou)}</textarea></label>
+      <div class="chips" id="qc-naiyou"></div>
       <button id="q-ok" class="btn primary big">撮影に戻る</button>`);
-    fillLists(s);
-    FIELDS.forEach(k => $('q-' + k).addEventListener('input', e => { setField(k, e.target.value); updateCamLabel(); }));
+    const L = chipLists(s);
+    FIELDS.forEach(k => {
+      chips('qc-' + k, L[k], k, 'q-');
+      $('q-' + k).addEventListener('input', e => { setField(k, e.target.value); updateCamLabel(); });
+    });
     $('q-ok').onclick = closeDlg;
+    // 入力中はカメラ映像の描画を止める（キーボードを出す余力を残す）
+    $('cam-video').pause();
   }
 
   // ---------- 撮影 ----------
@@ -553,13 +601,17 @@
     if (!v.videoWidth) { toast('カメラの準備ができていません'); return; }
     busy = true;
     $('cam-shutter').disabled = true;
+    flushSite();
+    let canvas = null;
     try {
       const now = new Date();
       flash();
       if (set.sound) click();
       const [W, H] = outSize();
       const src = await Camera.grabSource(v, set.stillMode);
-      const { canvas, ctx, srcCropW } = Camera.cropTo(src, W, H, curRot());
+      const crop = Camera.cropTo(src, W, H, curRot());
+      canvas = crop.canvas;
+      const ctx = crop.ctx, srcCropW = crop.srcCropW;
       if (src.still && src.src.close) src.src.close();
 
       const s = ensureSite(curSite());
@@ -575,6 +627,7 @@
       const bytes = Exif.insert(await jpg.arrayBuffer(), app1);
       const sha = await sha256(bytes);
       const thumb = await makeThumb(canvas);
+      Camera.release(canvas); canvas = null;
 
       let name = [stamp(now), safeName(s.board.kousyu), safeName(s.board.sokuten)].filter(Boolean).join('_');
       if (name === lastName || name.startsWith(lastName + '-')) name += '-' + now.getMilliseconds();
@@ -589,8 +642,12 @@
         sha256: sha, gps, upscaled: srcCropW < W - 1, still: !!src.still
       };
       await Store.putPhoto(rec);
-      remember(s);
-      Store.putSite(s);
+      // 保存中に黒板が書き換えられていても消さないよう、最新を読み直して履歴だけ足す
+      const latest = ensureSite(curSite());
+      const shot = { board: rec.board, hist: latest.hist };
+      remember(shot);
+      latest.hist = shot.hist;
+      Store.putSite(latest);
       setLastThumb(thumb);
       toast(`保存しました ${W}×${H}` + (rec.upscaled ? '（映像から拡大）' : ''));
       if (set.autoDownload) download(rec.blob, name);
@@ -598,6 +655,7 @@
       console.error(e);
       toast('撮影に失敗しました：' + (e && e.message || e), 4000);
     } finally {
+      if (canvas) Camera.release(canvas);
       busy = false;
       $('cam-shutter').disabled = false;
     }
@@ -608,17 +666,26 @@
     f.classList.add('on');
     requestAnimationFrame(() => requestAnimationFrame(() => f.classList.remove('on')));
   }
-  let actx = null;
+  // シャッター音。音の装置の準備は重い（初回の撮影で画面が止まる）ので、カメラを開くときに済ませておく
+  let actx = null, clickBuf = null;
+  function prepareSound() {
+    if (!set.sound || actx) return;
+    try {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      const len = Math.floor(actx.sampleRate * 0.06);
+      clickBuf = actx.createBuffer(1, len, actx.sampleRate);
+      const d = clickBuf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    } catch (e) { actx = null; }
+  }
   function click() {
     try {
-      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-      const len = Math.floor(actx.sampleRate * 0.06);
-      const buf = actx.createBuffer(1, len, actx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+      if (!actx) prepareSound();
+      if (!actx) return;
+      if (actx.state === 'suspended') actx.resume().catch(() => {});
       const src = actx.createBufferSource();
       const g = actx.createGain(); g.gain.value = 0.5;
-      src.buffer = buf; src.connect(g); g.connect(actx.destination); src.start();
+      src.buffer = clickBuf; src.connect(g); g.connect(actx.destination); src.start();
     } catch (e) {}
   }
   async function sha256(bytes) {
@@ -633,7 +700,7 @@
     const g = t.getContext('2d');
     g.imageSmoothingQuality = 'high';
     g.drawImage(canvas, 0, 0, t.width, t.height);
-    return new Promise(r => t.toBlob(r, 'image/jpeg', 0.75));
+    return new Promise(r => t.toBlob(b => { Camera.release(t); r(b); }, 'image/jpeg', 0.75));
   }
   let thumbUrl = null;
   async function setLastThumb(blob) {
@@ -799,9 +866,14 @@
     $('dlg').classList.remove('hidden');
   }
   function closeDlg() {
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     $('dlg').classList.add('hidden');
     $('dlg-body').innerHTML = '';
-    if (camOpen) layoutBoard();
+    flushSite();
+    if (camOpen) {
+      $('cam-video').play().catch(() => {});
+      layoutFrame();
+    }
   }
   $('dlg-x').onclick = closeDlg;
   $('dlg').addEventListener('click', e => { if (e.target === $('dlg')) closeDlg(); });
@@ -851,6 +923,7 @@
 
   // ---------- バックアップ ----------
   $('btn-export').onclick = () => {
+    flushSite();
     const data = { app: 'kokuban-camera', version: VERSION, exportedAt: new Date().toISOString(), settings: set, sites: Store.sites() };
     download(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }), '黒板カメラ_現場データ_' + stamp(new Date()).slice(0, 8) + '.json');
   };
@@ -954,6 +1027,10 @@
   if (navigator.getInstalledRelatedApps) {
     navigator.getInstalledRelatedApps().then(list => { if (list && list.length) { installedApp = true; renderInstall(); } }).catch(() => {});
   }
+
+  // 実機で何か起きたときに画面で分かるようにする
+  window.addEventListener('error', e => toast('エラー：' + (e.message || '不明'), 5000));
+  window.addEventListener('unhandledrejection', e => toast('エラー：' + (e.reason && e.reason.message || e.reason), 5000));
 
   // ---------- 起動 ----------
   $('ver').textContent = '黒板カメラ v' + VERSION;

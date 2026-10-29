@@ -11,6 +11,8 @@ APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(tempfile.gettempdir(), 'kokuban_test')
 os.makedirs(OUT, exist_ok=True)
 PORT = 8765
+# 2つ目の引数で別の手順を流せる（例: python test/run_test.py flow_edit.js）
+FLOW = sys.argv[1] if len(sys.argv) > 1 else 'flow.js'
 done = threading.Event()
 result = {}
 
@@ -31,7 +33,7 @@ class H(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/__test'):
             html = open(os.path.join(APP, 'index.html'), encoding='utf-8').read()
-            flow = open(os.path.join(APP, 'test', 'flow.js'), encoding='utf-8').read()
+            flow = open(os.path.join(APP, 'test', FLOW), encoding='utf-8').read()
             html = html.replace('<body>', '<body>\n' + CATCH, 1)
             html = html.replace('</body>', '<script>' + flow + '</script>\n</body>', 1)
             b = html.encode('utf-8')
@@ -83,6 +85,10 @@ def main():
         mark = 'OK ' if r['ok'] else 'NG '
         fails += 0 if r['ok'] else 1
         print(mark, r['name'], ('  ' + r['info']) if r['info'] else '')
+
+    if FLOW != 'flow.js':
+        print('失敗', fails, '件')
+        sys.exit(1 if fails else 0)
 
     # --- Python 側の確認 ---
     from PIL import Image
