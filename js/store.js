@@ -20,6 +20,8 @@ const Store = (() => {
     dateFmt: 'wareki',
     rows: { koji: true, kousyu: true, shubetsu: true, sokuten: true, naiyou: true, date: false, contractor: false },
     autoDownload: true,
+    saveMode: 'download', // download=Download フォルダー / folder=選んだフォルダー
+    saveSubdir: true,       // 選んだフォルダーの中に現場ごとのフォルダーを作る
     gps: false,
     stillMode: false,
     sound: true
@@ -61,10 +63,15 @@ const Store = (() => {
   function db() {
     if (!dbp) {
       dbp = new Promise((res, rej) => {
-        const r = indexedDB.open('kokuban-camera', 1);
-        r.onupgradeneeded = () => {
-          const s = r.result.createObjectStore('photos', { keyPath: 'id' });
-          s.createIndex('site', 'siteId');
+        const r = indexedDB.open('kokuban-camera', 2);
+        r.onupgradeneeded = e => {
+          const d = r.result;
+          if (e.oldVersion < 1) {
+            const s = d.createObjectStore('photos', { keyPath: 'id' });
+            s.createIndex('site', 'siteId');
+          }
+          // v2: 保存先フォルダーのハンドルなど、小さな値を入れる
+          if (e.oldVersion < 2) d.createObjectStore('kv');
         };
         r.onsuccess = () => res(r.result);
         r.onerror = () => rej(r.error);
@@ -74,6 +81,15 @@ const Store = (() => {
   }
   function req(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
   function done(t) { return new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error); }); }
+
+  async function getKV(key) {
+    return req((await db()).transaction('kv').objectStore('kv').get(key));
+  }
+  async function setKV(key, val) {
+    const t = (await db()).transaction('kv', 'readwrite');
+    t.objectStore('kv').put(val, key);
+    return done(t);
+  }
 
   async function putPhoto(rec) {
     const t = (await db()).transaction('photos', 'readwrite');
@@ -107,6 +123,7 @@ const Store = (() => {
   return {
     DEFAULTS, settings, saveSettings,
     sites, saveSites, site, putSite, removeSite,
+    getKV, setKV,
     putPhoto, getPhoto, listPhotos, countPhotos, deletePhotos, deleteSitePhotos
   };
 })();

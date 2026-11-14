@@ -3,7 +3,7 @@
    外部の API を使わないので、本体を入れておけば圏外でも撮影できる。
    更新を早く反映したいときは APP_CACHE の版数を上げる。
    ============================================================ */
-var APP_CACHE = 'kokuban-app-v4';
+var APP_CACHE = 'kokuban-app-v5';
 
 var SHELL = [
   './',
@@ -13,6 +13,7 @@ var SHELL = [
   './js/zip.js',
   './js/board.js',
   './js/store.js',
+  './js/savedir.js',
   './js/camera.js',
   './js/app.js',
   './manifest.webmanifest',

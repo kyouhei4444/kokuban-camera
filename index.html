@@ -231,7 +231,25 @@
       <label><input type="checkbox" data-row="contractor"> 受注者</label>
     </div>
   </div>
-  <label class="sw"><input type="checkbox" id="s-auto"> 撮影ごとに端末へ保存する（ダウンロード）</label>
+  <div class="fld save-box"><span>端末への保存</span>
+    <label class="sw"><input type="checkbox" id="s-auto"> 撮影ごとに端末へ保存する</label>
+    <select id="s-savemode">
+      <option value="download">Download フォルダー（従来どおり）</option>
+      <option value="folder">選んだフォルダー（DCIM/kokuban・SDカードなど）</option>
+    </select>
+    <div id="s-folder-box" class="hidden">
+      <div class="kv mt"><span>保存先</span><b id="s-folder-name"></b></div>
+      <button id="s-folder-pick" class="btn">フォルダーを選ぶ・変える</button>
+      <label class="sw"><input type="checkbox" id="s-subdir"> 中に現場ごとのフォルダーを作る</label>
+      <p class="note">「フォルダーを選ぶ」→ 左上の ≡ から<b>内部ストレージ</b>か<b>SDカード</b>を選ぶ →
+        <b>DCIM</b> を開き、「新しいフォルダ」で <b>kokuban</b> を作って開く →「このフォルダを使用」→「許可」。<br>
+        Android の決まりで、ストレージの一番上と Download フォルダーそのものは選べません。<br>
+        アプリを開き直したあとの最初の撮影で、書き込みの許可をもう一度聞かれることがあります。</p>
+    </div>
+    <p id="s-unsup" class="note hidden">この端末のブラウザはフォルダーの指定に対応していないため、
+      「Download」に保存します（Android の Chrome 132 以降で使えます）。Chrome の設定 →「ダウンロード」→「ダウンロード先」で
+      SDカードを選ぶと、SDカードの Download フォルダーに保存されます。</p>
+  </div>
   <label class="sw"><input type="checkbox" id="s-gps"> 位置情報（GPS）を写真に記録する</label>
   <label class="sw"><input type="checkbox" id="s-still"> 静止画モード（対応機種のみ・高画素から切り出す）</label>
   <label class="sw"><input type="checkbox" id="s-sound"> シャッター音</label>
@@ -261,7 +279,9 @@
       初期値を <b>1280×960（約120万画素・4:3）</b>にしています。</p>
     <h3>保存場所</h3>
     <p>写真はこのアプリ（ブラウザ）の中に保存されます。<b>ブラウザのデータを消すと写真も消えます。</b>
-      「撮影ごとに端末へ保存」をオンにしておくと、端末の「ダウンロード」フォルダーにも残ります。</p>
+      「撮影ごとに端末へ保存」をオンにしておくと、端末にも残ります。</p>
+    <p>保存先は設定の「端末への保存」で、<b>Download フォルダー</b>か、<b>自分で選んだフォルダー</b>
+      （内部ストレージや SDカードの DCIM/kokuban など）を選べます。選んだフォルダーに書き込めないときは Download に保存します。</p>
   </div>
 </template>
 
@@ -269,6 +289,7 @@
 <script src="js/zip.js"></script>
 <script src="js/board.js"></script>
 <script src="js/store.js"></script>
+<script src="js/savedir.js"></script>
 <script src="js/camera.js"></script>
 <script src="js/app.js"></script>
 </body>

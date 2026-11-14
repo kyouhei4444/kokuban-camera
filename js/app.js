@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.1.1';
+  const VERSION = '1.2.0';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -20,7 +20,7 @@
   let camOpen = false, camInfo = null, busy = false;
   let gpsWatch = null, gpsLast = null;
   let wakeLock = null;
-  let lastName = '';
+  let lastName = '', lastDup = 1;
   let gallery = [], gallerySel = new Set(), galleryUrls = [];
 
   // ---------- 共通 ----------
@@ -289,7 +289,11 @@
     Board.draw(g, 0, 0, cssW, list, set.theme);
   }
 
-  $('btn-camera').onclick = () => { askMotion(); prepareSound(); go('camera'); };
+  $('btn-camera').onclick = () => {
+    askMotion(); prepareSound();
+    if (set.autoDownload && useFolder()) SaveDir.permission(true); // 毎回の起動で1度だけ許可を取り直す
+    go('camera');
+  };
   $('btn-gallery').onclick = () => go('gallery');
 
   function remember(s) {
@@ -602,6 +606,8 @@
     busy = true;
     $('cam-shutter').disabled = true;
     flushSite();
+    // フォルダーへの書き込み許可はシャッターのタップの中で取る（後で取ると許可の画面が出せない）
+    const permP = set.autoDownload && useFolder() ? SaveDir.permission(true) : null;
     let canvas = null;
     try {
       const now = new Date();
@@ -630,8 +636,8 @@
       Camera.release(canvas); canvas = null;
 
       let name = [stamp(now), safeName(s.board.kousyu), safeName(s.board.sokuten)].filter(Boolean).join('_');
-      if (name === lastName || name.startsWith(lastName + '-')) name += '-' + now.getMilliseconds();
-      lastName = name;
+      // 同じ秒に続けて撮ったときは -2, -3 … を付ける（保存先フォルダーで上書きしないように）
+      if (name === lastName) name += '-' + (++lastDup); else { lastName = name; lastDup = 1; }
       name += '.jpg';
 
       const rec = {
@@ -650,7 +656,10 @@
       Store.putSite(latest);
       setLastThumb(thumb);
       toast(`保存しました ${W}×${H}` + (rec.upscaled ? '（映像から拡大）' : ''));
-      if (set.autoDownload) download(rec.blob, name);
+      if (set.autoDownload) {
+        const where = await saveToDevice(rec.blob, name, s.name, permP ? await permP : undefined);
+        if (where === 'folder') toast(`保存しました ${W}×${H} →「${SaveDir.name}」`);
+      }
     } catch (e) {
       console.error(e);
       toast('撮影に失敗しました：' + (e && e.message || e), 4000);
@@ -790,7 +799,36 @@
     }
   }
   async function dlFiles(list) {
-    for (const p of list) { download(p.blob, p.name); await new Promise(r => setTimeout(r, 350)); }
+    // 一覧からの「保存」はタップの中なので、ここで書き込み許可を取れる
+    const allowed = useFolder() ? await SaveDir.permission(true) : false;
+    let n = 0;
+    for (const p of list) {
+      if ((await saveToDevice(p.blob, p.name, p.siteName, allowed)) === 'folder') n++;
+      else await new Promise(r => setTimeout(r, 350));
+    }
+    if (n) toast(`${n} 枚を「${SaveDir.name}」に保存しました`);
+  }
+
+  // ---------- 端末への保存（選んだフォルダー or Download） ----------
+  function useFolder() { return set.saveMode === 'folder' && SaveDir.supported() && !!SaveDir.handle; }
+  /** 端末に保存して 'folder' か 'download' を返す。allowed は書き込み許可の結果（未確認なら undefined） */
+  async function saveToDevice(blob, name, siteName, allowed) {
+    if (useFolder()) {
+      const ok = allowed === undefined ? await SaveDir.permission(false) : allowed;
+      if (ok) {
+        try {
+          await SaveDir.write(blob, name, set.saveSubdir ? safeName(siteName) || '現場' : '');
+          return 'folder';
+        } catch (e) {
+          console.error(e);
+          toast('フォルダーに保存できなかったため「Download」に保存しました（' + (e && e.name || e) + '）', 5000);
+        }
+      } else {
+        toast('保存先フォルダーへの書き込みが許可されていないため「Download」に保存しました', 5000);
+      }
+    }
+    download(blob, name);
+    return 'download';
   }
   $('gal-share').onclick = () => { const l = selected(); if (l.length) shareFiles(l); };
   $('gal-dl').onclick = () => { const l = selected(); if (l.length) dlFiles(l); };
@@ -896,6 +934,23 @@
       el.onchange = () => { set[key] = el.checked; saveSet(); applySettings(key); };
     };
     chk('s-auto', 'autoDownload');
+    chk('s-subdir', 'saveSubdir');
+    // 保存先
+    const showSave = () => {
+      const sup = SaveDir.supported();
+      $('s-savemode').value = useFolder() ? 'folder' : (set.saveMode === 'folder' && sup ? 'folder' : 'download');
+      $('s-savemode').disabled = !sup;
+      $('s-unsup').classList.toggle('hidden', sup);
+      $('s-folder-box').classList.toggle('hidden', !sup || $('s-savemode').value !== 'folder');
+      $('s-folder-name').textContent = SaveDir.name || '（まだ選んでいません）';
+    };
+    $('s-savemode').onchange = async () => {
+      set.saveMode = $('s-savemode').value; saveSet();
+      if (set.saveMode === 'folder' && !SaveDir.handle) await pickFolder();
+      showSave();
+    };
+    $('s-folder-pick').onclick = async () => { await pickFolder(); showSave(); };
+    showSave();
     chk('s-gps', 'gps');
     chk('s-still', 'stillMode');
     chk('s-sound', 'sound');
@@ -907,6 +962,16 @@
       set.boardScale = Store.DEFAULTS.boardScale; set.boardFx = Store.DEFAULTS.boardFx; set.boardFy = Store.DEFAULTS.boardFy;
       saveSet(); applySettings('pos'); toast('黒板を左下・標準の大きさに戻しました');
     };
+  }
+  async function pickFolder() {
+    try {
+      await SaveDir.pick();
+      set.saveMode = 'folder'; saveSet();
+      toast(`保存先を「${SaveDir.name}」にしました`, 3000);
+    } catch (e) {
+      if (!(e && e.name === 'AbortError')) toast('フォルダーを選べませんでした：' + (e && e.message || e), 5000);
+      if (!SaveDir.handle) { set.saveMode = 'download'; saveSet(); }
+    }
   }
   function applySettings(key) {
     if (key === 'res') { $('cam-res').textContent = set.res.replace('x', '×'); restartIfNeeded(); }
@@ -1036,6 +1101,7 @@
   $('ver').textContent = '黒板カメラ v' + VERSION;
   history.replaceState({ v: 'home' }, '');
   render('home');
+  SaveDir.load();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
