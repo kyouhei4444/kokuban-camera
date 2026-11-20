@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -378,6 +378,7 @@
         z.classList.remove('hidden');
       } else z.classList.add('hidden');
       layoutFrame();
+      initExposure();
       requestWake();
       if (set.gps) gpsStart();
     } catch (e) {
@@ -476,12 +477,83 @@
     }
   }
 
-  // 黒板の移動（1本指でドラッグ）と大きさ（2本指でつまむ）
+  // ---------- 明るさ ----------
+  // mode: 'hw' = カメラ本体の露出補正（EV） / 'sw' = 画像の明るさを 2^ev 倍（本体が対応していない機種）
+  let expo = { mode: 'sw', ev: 0, caps: null, auto: true };
+  function swGain() { return expo.mode === 'sw' ? Math.pow(2, expo.ev) : 1; }
+  function initExposure() {
+    const caps = Camera.exposureCaps();
+    expo = { mode: caps ? 'hw' : 'sw', ev: 0, caps, auto: true };
+    const r = $('cam-exp');
+    if (caps) { r.min = Math.max(caps.min, -3); r.max = Math.min(caps.max, 3); r.step = caps.step; }
+    else { r.min = -2; r.max = 2; r.step = 0.1; }
+    applyExposure(0, true);
+  }
+  function clampEv(ev) {
+    const r = $('cam-exp'), st = +r.step || 0.1;
+    ev = Math.min(+r.max, Math.max(+r.min, ev));
+    return Math.round(Math.round(ev / st) * st * 100) / 100;
+  }
+  function showExposure() {
+    $('cam-exp').value = expo.ev;
+    const v = (expo.ev > 0 ? '+' : expo.ev < 0 ? '−' : '') + Math.abs(expo.ev).toFixed(1);
+    const b = $('cam-exp-auto');
+    b.textContent = expo.auto ? (expo.ev ? 'A ' + v : '自動') : v;
+    b.classList.toggle('on', !expo.auto);
+    $('cam-video').style.filter = expo.mode === 'sw' && expo.ev ? 'brightness(' + swGain().toFixed(3) + ')' : '';
+  }
+  function applyExposure(ev, auto) {
+    expo.ev = clampEv(ev);
+    expo.auto = !!auto;
+    if (expo.mode === 'hw') Camera.setExposure(expo.ev);
+    showExposure();
+  }
+  $('cam-exp').addEventListener('input', e => applyExposure(+e.target.value, false));
+  $('cam-exp-auto').onclick = () => {
+    applyExposure(0, true);
+    if (expo.mode === 'hw') Camera.meterAt(0.5, 0.5);
+    toast('明るさを自動に戻しました');
+  };
+
+  /** 画面をタップ：その場所がちょうどよい明るさになるよう合わせる（ピントも対応機種なら合わせる） */
+  async function tapMeter(fx, fy) {
+    const v = $('cam-video');
+    if (!v.videoWidth || !view.fw) return;
+    const [W, H] = outSize();
+    const r = Camera.cropRect(v.videoWidth, v.videoHeight, W, H, view.rot);
+    const nx = (r.cx + fx / view.fw * r.cw) / v.videoWidth;
+    const ny = (r.cy + fy / view.fh * r.ch) / v.videoHeight;
+    showFocus(fx, fy);
+    if (expo.mode === 'hw' && expo.caps.poi) {
+      // カメラ本体がその位置で測り直す
+      applyExposure(0, true);
+      await Camera.meterAt(nx, ny);
+      return;
+    }
+    Camera.meterAt(nx, ny); // ピントだけでも合わせる
+    const y = Camera.lumaAt(v, nx, ny);
+    if (y == null) return;
+    // 中間の明るさ（118/255）に寄せる。sw は補正前の映像を測っているので 0 から、hw は今の補正値から足す
+    const delta = Math.log2(118 / Math.max(4, y));
+    applyExposure((expo.mode === 'hw' ? expo.ev : 0) + delta, true);
+  }
+  let focusTimer = null;
+  function showFocus(x, y) {
+    const f = $('cam-focus');
+    f.classList.add('hidden');
+    void f.offsetWidth; // アニメーションをやり直す
+    f.style.left = x + 'px'; f.style.top = y + 'px';
+    f.classList.remove('hidden');
+    clearTimeout(focusTimer);
+    focusTimer = setTimeout(() => f.classList.add('hidden'), 1500);
+  }
+
+  // 黒板の移動（1本指でドラッグ）と大きさ（2本指でつまむ）。黒板の外を軽くタップすると明るさを合わせる
   let dragging = false;
   (() => {
     const c = $('cam-board');
     const pts = new Map();
-    let drag = null, pinch = null;
+    let drag = null, pinch = null, tap = null;
     const local = e => {
       const r = c.getBoundingClientRect();
       return screenToUpright(e.clientX - r.left, e.clientY - r.top);
@@ -492,7 +564,7 @@
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       try { c.setPointerCapture(e.pointerId); } catch (err) {}
       if (pts.size === 2) {
-        drag = null;
+        drag = null; tap = null;
         pinch = { d: dist(), scale: set.boardScale };
         dragging = true;
         layoutBoard();
@@ -503,12 +575,15 @@
           drag = { u, v, x: r.x, y: r.y };
           dragging = true;
           layoutBoard();
+        } else {
+          tap = { x: e.clientX, y: e.clientY, t: Date.now() };
         }
       }
     });
     c.addEventListener('pointermove', e => {
       if (!pts.has(e.pointerId)) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (tap && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 12) tap = null;
       if (pinch && pts.size >= 2) {
         const k = dist() / (pinch.d || 1);
         set.boardScale = Math.min(0.9, Math.max(0.1, pinch.scale * k));
@@ -524,6 +599,11 @@
       }
     });
     const end = e => {
+      if (tap && e.type === 'pointerup' && pts.size === 1 && Date.now() - tap.t < 600) {
+        const r = c.getBoundingClientRect();
+        tapMeter(e.clientX - r.left, e.clientY - r.top);
+      }
+      tap = null;
       pts.delete(e.pointerId);
       if (pts.size < 2) pinch = null;
       if (!pts.size && dragging) { dragging = false; drag = null; saveSet(); layoutBoard(); }
@@ -615,7 +695,7 @@
       if (set.sound) click();
       const [W, H] = outSize();
       const src = await Camera.grabSource(v, set.stillMode);
-      const crop = Camera.cropTo(src, W, H, curRot());
+      const crop = Camera.cropTo(src, W, H, curRot(), swGain());
       canvas = crop.canvas;
       const ctx = crop.ctx, srcCropW = crop.srcCropW;
       if (src.still && src.src.close) src.src.close();
@@ -1109,5 +1189,5 @@
   window.addEventListener('resize', () => { if ($('view-board').classList.contains('active')) drawPreview(); });
 
   // テスト用に一部を公開
-  window.__kc = { stepNo, outSize, boardRows, shoot, go, openSite, curRot, get set() { return set; }, setDevAngle(a) { devAngle = a; layoutFrame(); } };
+  window.__kc = { get expo() { return expo; }, tapMeter, stepNo, outSize, boardRows, shoot, go, openSite, curRot, get set() { return set; }, setDevAngle(a) { devAngle = a; layoutFrame(); } };
 })();

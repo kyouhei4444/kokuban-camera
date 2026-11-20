@@ -70,6 +70,57 @@ const Camera = (() => {
     try { await track.applyConstraints({ advanced: [{ zoom: z }] }); } catch (e) {}
   }
 
+  // ---------- 明るさ（露出） ----------
+  // カメラ本体が露出補正に対応していればそれを使い（hw）、
+  // 対応していなければ画像の明るさを掛け算で変える（sw：プレビューは CSS、保存画像は canvas で同じ倍率）
+  function exposureCaps() {
+    const caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    const ec = caps.exposureCompensation;
+    if (!ec || !(ec.max > ec.min)) return null;
+    const sup = navigator.mediaDevices.getSupportedConstraints ? navigator.mediaDevices.getSupportedConstraints() : {};
+    return {
+      min: ec.min, max: ec.max, step: ec.step || 0.1,
+      poi: !!sup.pointsOfInterest,                         // 画面の位置を指定して測光できる
+      continuous: (caps.exposureMode || []).includes('continuous'),
+      focus: (caps.focusMode || []).filter(m => m === 'single-shot' || m === 'continuous')
+    };
+  }
+  async function setExposure(ev) {
+    if (!track) return false;
+    try { await track.applyConstraints({ advanced: [{ exposureCompensation: ev }] }); return true; } catch (e) { return false; }
+  }
+  /** (x,y)（映像の 0〜1）を基準に測光・ピント合わせをやり直す（対応機種のみ） */
+  async function meterAt(x, y) {
+    if (!track) return false;
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    const sup = navigator.mediaDevices.getSupportedConstraints ? navigator.mediaDevices.getSupportedConstraints() : {};
+    const c = {};
+    if (sup.pointsOfInterest) c.pointsOfInterest = [{ x, y }];
+    if ((caps.exposureMode || []).includes('continuous')) c.exposureMode = 'continuous';
+    const fm = caps.focusMode || [];
+    if (fm.includes('single-shot')) c.focusMode = 'single-shot';
+    else if (fm.includes('continuous')) c.focusMode = 'continuous';
+    if (!Object.keys(c).length) return false;
+    try { await track.applyConstraints({ advanced: [c] }); return true; } catch (e) { return false; }
+  }
+
+  /** 映像の (x,y)（0〜1）まわりの平均の明るさ（0〜255）。タップで自動に合わせるのに使う */
+  let meterCanvas = null;
+  function lumaAt(video, x, y) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    const r = Math.min(vw, vh) * 0.12; // タップ位置のまわり（短辺の 24% 四方）
+    const sx = Math.min(Math.max(0, x * vw - r), vw - 2 * r), sy = Math.min(Math.max(0, y * vh - r), vh - 2 * r);
+    meterCanvas = meterCanvas || document.createElement('canvas');
+    meterCanvas.width = 24; meterCanvas.height = 24;
+    const g = meterCanvas.getContext('2d', { willReadFrequently: true });
+    g.drawImage(video, sx, sy, 2 * r, 2 * r, 0, 0, 24, 24);
+    const d = g.getImageData(0, 0, 24, 24).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    return sum / (d.length / 4);
+  }
+
   /** 撮影元（映像そのもの or 静止画）を返す */
   async function grabSource(video, useStill) {
     const vw = video.videoWidth, vh = video.videoHeight;
@@ -100,8 +151,9 @@ const Camera = (() => {
 
   /** 映像を正立させ、中央を切り出して outW×outH の canvas に描く。
       rot=90 は「スマホを左に倒した（上端が左）」とき：映像の右側が上になるよう左へ回す */
-  function cropTo(source, outW, outH, rot) {
+  function cropTo(source, outW, outH, rot, gain) {
     rot = rot || 0;
+    gain = gain || 1; // 明るさの倍率（sw のときだけ 1 以外）
     const { cx, cy, cw, ch, tw, th } = cropRect(source.w, source.h, outW, outH, rot);
 
     // 大きく縮めるときは半分ずつ縮めて画質を保つ
@@ -123,9 +175,19 @@ const Camera = (() => {
     if (rot === 90) { ctx.translate(0, outH); ctx.rotate(-Math.PI / 2); }
     else if (rot === 270) { ctx.translate(outW, 0); ctx.rotate(Math.PI / 2); }
     else if (rot === 180) { ctx.translate(outW, outH); ctx.rotate(Math.PI); }
+    const useFilter = gain !== 1 && 'filter' in ctx;
+    if (useFilter) ctx.filter = 'brightness(' + gain.toFixed(3) + ')';
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
     ctx.restore();
     if (img !== source.src) release(img);
+    if (gain !== 1 && !useFilter) {
+      // canvas の filter が無いブラウザ（古い Safari など）は画素ごとに掛ける
+      const im = ctx.getImageData(0, 0, outW, outH), d = im.data;
+      for (let i = 0; i < d.length; i += 4) {
+        d[i] = Math.min(255, d[i] * gain); d[i + 1] = Math.min(255, d[i + 1] * gain); d[i + 2] = Math.min(255, d[i + 2] * gain);
+      }
+      ctx.putImageData(im, 0, 0);
+    }
     // 拡大になっているかの判定用に、正立後の向きでの切り出し幅を返す
     const odd = rot === 90 || rot === 270;
     return { canvas: out, ctx, srcCropW: Math.round(odd ? ch : cw), srcCropH: Math.round(odd ? cw : ch) };
@@ -137,5 +199,8 @@ const Camera = (() => {
     if (c && 'width' in c) { c.width = 0; c.height = 0; }
   }
 
-  return { supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo, cropRect, release };
+  return {
+    supported, start, stop, alive, info: v => info(v), setTorch, setZoom, grabSource, cropTo, cropRect, release,
+    exposureCaps, setExposure, meterAt, lumaAt
+  };
 })();

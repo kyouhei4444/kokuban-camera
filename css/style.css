@@ -164,6 +164,19 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--green);flex:none}
 #cam-shutter:disabled{opacity:.5}
 #cam-zoom{width:100%;accent-color:var(--accent)}
 
+/* 明るさ */
+.exp-row{gap:6px}
+.exp-ic{font-size:20px;flex:none;width:26px;text-align:center}
+#cam-exp{flex:1;min-width:0;accent-color:#ffd23f;height:32px}
+#cam-exp-auto{flex:none;min-width:64px;justify-content:center;height:34px}
+#cam-exp-auto.on{background:#ffd23f;color:#111}
+/* タップした場所の印 */
+#cam-focus{position:absolute;width:72px;height:72px;margin:-36px 0 0 -36px;border:2px solid #ffd23f;border-radius:8px;
+  pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,.4);animation:focus-in .25s ease-out}
+#cam-focus::after{content:"AE";position:absolute;left:50%;top:100%;transform:translate(-50%,4px);font-size:11px;font-weight:700;
+  color:#ffd23f;text-shadow:0 0 3px #000}
+@keyframes focus-in{from{transform:scale(1.4);opacity:0}to{transform:scale(1);opacity:1}}
+
 /* 横持ち：操作部を右に */
 @media (orientation:landscape) and (max-height:600px){
   #view-camera{flex-direction:row}
@@ -171,6 +184,8 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--green);flex:none}
   .cc-row.main{flex-direction:column;gap:10px}
   .cc-row:first-child{flex-wrap:wrap;justify-content:center}
   .cc-row:first-child .cpill.grow{order:-1;flex-basis:100%}
+  .exp-row{flex-wrap:wrap}
+  .exp-row #cam-exp{flex-basis:100%;order:2}
 }
 
 /* ---------- ダイアログ ---------- */

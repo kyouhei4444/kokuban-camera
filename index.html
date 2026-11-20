@@ -127,6 +127,7 @@
     <div id="cam-frame">
       <video id="cam-video" playsinline muted autoplay></video>
       <canvas id="cam-board"></canvas>
+      <div id="cam-focus" class="hidden"></div>
       <div id="cam-flash"></div>
     </div>
     <div id="cam-top">
@@ -144,6 +145,11 @@
       <button id="cam-sk-prev" class="cbtn sm" title="測点を戻す">◀</button>
       <button id="cam-edit" class="cpill grow" title="黒板を編集"><span id="cam-sk">測点</span></button>
       <button id="cam-sk-next" class="cbtn sm" title="測点を進める">▶</button>
+    </div>
+    <div class="cc-row exp-row">
+      <span class="exp-ic" aria-hidden="true">☀</span>
+      <input id="cam-exp" type="range" min="-2" max="2" step="0.1" value="0" aria-label="明るさ">
+      <button id="cam-exp-auto" class="cpill" title="明るさを自動に戻す">自動</button>
     </div>
     <div class="cc-row main">
       <button id="cam-thumb" class="thumb" title="写真一覧"></button>
@@ -265,6 +271,7 @@
       <li>カメラ画面で黒板を<b>1本指でドラッグ</b>して置き場所を決め、<b>2本指でつまんで（広げて）</b>大きさを変える（＋−ボタンでも可）。</li>
       <li>スマホを<b>横に倒すと横の写真</b>（1280×960）、縦に持つと縦の写真になる。画面の自動回転がオフでも傾きで判定する。画面上部の「1280×960 横」で確認できる。</li>
       <li>シャッターを押すと、黒板を焼き込んだ写真が<b>指定の画素数</b>（標準 1280×960）で保存される。</li>
+      <li><b>画面をタップ</b>すると、その場所がちょうどよい明るさになるよう自動で合わせる（ピントも対応機種なら合わせる）。☀のバーを動かすと手動で明るく・暗くできる。「自動」で元に戻す。</li>
       <li>測点は ◀ ▶ で番号を1つずつ送れる（No.5 → No.6）。</li>
       <li>「写真一覧」から共有・保存・ZIP（撮影台帳 CSV 付き）で取り出せる。</li>
     </ol>
