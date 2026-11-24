@@ -3,7 +3,7 @@
    ホーム（現場の選択）→ 黒板の入力 → カメラ → 写真一覧
    ============================================================ */
 (() => {
-  const VERSION = '1.3.0';
+  const VERSION = '1.3.1';
   const RES_LIST = ['640x480', '1280x960', '1600x1200', '2048x1536', '2592x1944'];
   const THEME_NAME = { green: '緑', black: '黒', white: '白' };
   const KOUSYU_DEFAULT = [
@@ -21,6 +21,7 @@
   let gpsWatch = null, gpsLast = null;
   let wakeLock = null;
   let lastName = '', lastDup = 1;
+  let folderDown = false; // 選んだフォルダーに保存できない状態
   let gallery = [], gallerySel = new Set(), galleryUrls = [];
 
   // ---------- 共通 ----------
@@ -291,7 +292,8 @@
 
   $('btn-camera').onclick = () => {
     askMotion(); prepareSound();
-    if (set.autoDownload && useFolder()) SaveDir.permission(true); // 毎回の起動で1度だけ許可を取り直す
+    // 毎回の起動で1度だけ許可を取り直す
+    if (set.autoDownload && useFolder()) SaveDir.permission(true).then(ok => setFolderDown(!ok));
     go('camera');
   };
   $('btn-gallery').onclick = () => go('gallery');
@@ -687,7 +689,7 @@
     $('cam-shutter').disabled = true;
     flushSite();
     // フォルダーへの書き込み許可はシャッターのタップの中で取る（後で取ると許可の画面が出せない）
-    const permP = set.autoDownload && useFolder() ? SaveDir.permission(true) : null;
+    const permP = set.autoDownload && useFolder() && !folderDown ? SaveDir.permission(true) : null;
     let canvas = null;
     try {
       const now = new Date();
@@ -737,8 +739,10 @@
       setLastThumb(thumb);
       toast(`保存しました ${W}×${H}` + (rec.upscaled ? '（映像から拡大）' : ''));
       if (set.autoDownload) {
-        const where = await saveToDevice(rec.blob, name, s.name, permP ? await permP : undefined);
-        if (where === 'folder') toast(`保存しました ${W}×${H} →「${SaveDir.name}」`);
+        // 待たない（保存先が応答しなくても次の撮影ができるように）
+        queueSave(rec.blob, name, s.name, permP).then(where => {
+          if (where === 'folder') toast(`保存しました ${W}×${H} →「${SaveDir.name}」`);
+        });
       }
     } catch (e) {
       console.error(e);
@@ -879,37 +883,70 @@
     }
   }
   async function dlFiles(list) {
+    if (useFolder()) setFolderDown(false); // 手動の保存では、あらためてフォルダーを試す
     // 一覧からの「保存」はタップの中なので、ここで書き込み許可を取れる
-    const allowed = useFolder() ? await SaveDir.permission(true) : false;
-    let n = 0;
-    for (const p of list) {
-      if ((await saveToDevice(p.blob, p.name, p.siteName, allowed)) === 'folder') n++;
-      else await new Promise(r => setTimeout(r, 350));
-    }
+    const permP = useFolder() ? SaveDir.permission(true) : null;
+    const res = await Promise.all(list.map(p => queueSave(p.blob, p.name, p.siteName, permP)));
+    const n = res.filter(r => r === 'folder').length;
     if (n) toast(`${n} 枚を「${SaveDir.name}」に保存しました`);
   }
 
   // ---------- 端末への保存（選んだフォルダー or Download） ----------
+  // 撮影とは切り離し、順番待ちの列で1枚ずつ保存する。保存が遅くても止まっても次の写真は撮れる。
+  // 一度フォルダーに保存できなかったら、取り直すまでは待たずに Download に保存する（folderDown）
+  let saveChain = Promise.resolve();
+  function queueSave(blob, name, siteName, permP) {
+    const r = saveChain.then(() => saveToDevice(blob, name, siteName, permP)).catch(e => {
+      console.error(e);
+      toast('端末に保存できませんでした（写真一覧には残っています）', 5000);
+      return 'error';
+    });
+    saveChain = r;
+    return r;
+  }
   function useFolder() { return set.saveMode === 'folder' && SaveDir.supported() && !!SaveDir.handle; }
-  /** 端末に保存して 'folder' か 'download' を返す。allowed は書き込み許可の結果（未確認なら undefined） */
-  async function saveToDevice(blob, name, siteName, allowed) {
-    if (useFolder()) {
-      const ok = allowed === undefined ? await SaveDir.permission(false) : allowed;
-      if (ok) {
+  function setFolderDown(v) {
+    folderDown = v;
+    $('cam-folder').classList.toggle('hidden', !(v && useFolder()));
+  }
+  /** 端末に保存して 'folder' か 'download' を返す。permP は書き込み許可の結果（Promise、無ければここで確認） */
+  async function saveToDevice(blob, name, siteName, permP) {
+    if (useFolder() && !folderDown) {
+      let why = '書き込みが許可されていません';
+      if (await (permP || SaveDir.permission(false))) {
         try {
           await SaveDir.write(blob, name, set.saveSubdir ? safeName(siteName) || '現場' : '');
           return 'folder';
         } catch (e) {
           console.error(e);
-          toast('フォルダーに保存できなかったため「Download」に保存しました（' + (e && e.name || e) + '）', 5000);
+          why = e && e.name === 'TimeoutError' ? e.message : (e && e.name || String(e));
         }
-      } else {
-        toast('保存先フォルダーへの書き込みが許可されていないため「Download」に保存しました', 5000);
       }
+      setFolderDown(true);
+      toast('フォルダーに保存できないため「Download」に保存します（' + why + '）。撮影画面の「保存先⚠」で直せます', 6000);
     }
     download(blob, name);
+    await new Promise(r => setTimeout(r, 350)); // 続けてダウンロードすると取りこぼすことがある
     return 'download';
   }
+  // 「保存先⚠」：許可を取り直すか、フォルダーを選び直す（どちらもタップの中でないと画面が出せない）
+  $('cam-folder').onclick = () => {
+    openDlg('保存先フォルダー', `
+      <p class="note">「${esc(SaveDir.name)}」に保存できなかったため、いまは <b>Download</b> に保存しています。写真はアプリの写真一覧にも残っています。</p>
+      <button id="fd-ask" class="btn primary">許可を取り直す</button>
+      <button id="fd-pick" class="btn mt">フォルダーを選び直す</button>
+      <p class="note">許可の画面が出ないときは「フォルダーを選び直す」で同じフォルダーを選んでください。</p>`);
+    $('fd-ask').onclick = async () => {
+      $('fd-ask').disabled = true;
+      const ok = await SaveDir.permission(true);
+      if (ok) { setFolderDown(false); closeDlg(); toast('保存先を「' + SaveDir.name + '」に戻しました'); }
+      else {
+        toast('許可を取れませんでした。「フォルダーを選び直す」を押してください', 5000);
+        if ($('fd-ask')) $('fd-ask').disabled = false;
+      }
+    };
+    $('fd-pick').onclick = async () => { await pickFolder(); if (!folderDown) closeDlg(); };
+  };
   $('gal-share').onclick = () => { const l = selected(); if (l.length) shareFiles(l); };
   $('gal-dl').onclick = () => { const l = selected(); if (l.length) dlFiles(l); };
   $('gal-zip').onclick = async () => {
@@ -1046,6 +1083,7 @@
   async function pickFolder() {
     try {
       await SaveDir.pick();
+      setFolderDown(false);
       set.saveMode = 'folder'; saveSet();
       toast(`保存先を「${SaveDir.name}」にしました`, 3000);
     } catch (e) {
@@ -1189,5 +1227,5 @@
   window.addEventListener('resize', () => { if ($('view-board').classList.contains('active')) drawPreview(); });
 
   // テスト用に一部を公開
-  window.__kc = { get expo() { return expo; }, tapMeter, stepNo, outSize, boardRows, shoot, go, openSite, curRot, get set() { return set; }, setDevAngle(a) { devAngle = a; layoutFrame(); } };
+  window.__kc = { resetFolder() { setFolderDown(false); }, get expo() { return expo; }, tapMeter, stepNo, outSize, boardRows, shoot, go, openSite, curRot, get set() { return set; }, setDevAngle(a) { devAngle = a; layoutFrame(); } };
 })();

@@ -126,7 +126,10 @@ const Camera = (() => {
     const vw = video.videoWidth, vh = video.videoHeight;
     if (useStill && imageCapture) {
       try {
-        const blob = await imageCapture.takePhoto();
+        const blob = await Promise.race([
+          imageCapture.takePhoto(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('takePhoto timeout')), 5000))
+        ]);
         const bmp = await createImageBitmap(blob);
         // 向きが映像と食い違う端末では使わない（回転方向が端末ごとに違うため）
         if ((bmp.width >= bmp.height) === (vw >= vh) && bmp.width >= vw) {

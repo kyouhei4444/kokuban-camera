@@ -62,6 +62,7 @@
     ok('失敗時は Download に退避', dl === 1 && /Download/.test($('toast').textContent), dl + ' ' + $('toast').textContent);
 
     // 許可が無い保存先 → Download
+    __kc.resetFolder();
     SaveDir.setHandle({ name: '許可なし', queryPermission: async () => 'prompt', requestPermission: async () => 'denied' });
     $('cam-shutter').click();
     await until(() => !$('cam-shutter').disabled, 8000);
